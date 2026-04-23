@@ -77,6 +77,7 @@ type model struct {
 	toNode   node.Node
 
 	inputMsg string
+	inputErr string
 
 	result    string
 	resultErr bool
@@ -95,6 +96,17 @@ func initialModel(buf *logbuffer.Buffer, nodes []node.Node) model {
 		logBuffer: buf,
 		nodes:     nodes,
 	}
+}
+
+// targets returns nodes excluding from — used for the TO selection list.
+func (m model) targets() []node.Node {
+	out := make([]node.Node, 0, len(m.nodes)-1)
+	for _, n := range m.nodes {
+		if n.ID != m.fromNode.ID {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func tickCmd() tea.Cmd {
@@ -235,6 +247,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case stateSelectTo:
+		targets := m.targets()
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			m.cursor = 0
@@ -244,12 +257,13 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.cursor--
 			}
 		case "down", "j":
-			if m.cursor < len(m.nodes)-1 {
+			if m.cursor < len(targets)-1 {
 				m.cursor++
 			}
 		case "enter":
-			m.toNode = m.nodes[m.cursor]
+			m.toNode = targets[m.cursor]
 			m.inputMsg = ""
+			m.inputErr = ""
 			m.state = stateInputMsg
 		}
 
@@ -260,8 +274,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = stateMenu
 		case "enter":
 			if m.inputMsg == "" {
+				m.inputErr = "message cannot be empty"
 				return m, nil
 			}
+			m.inputErr = ""
 			if m.action == actionSend {
 				return m, sendMsgCmd(m.fromNode, m.toNode, m.inputMsg)
 			}
@@ -270,10 +286,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(m.inputMsg) > 0 {
 				runes := []rune(m.inputMsg)
 				m.inputMsg = string(runes[:len(runes)-1])
+				m.inputErr = ""
 			}
 		default:
 			if len(msg.Runes) > 0 {
 				m.inputMsg += string(msg.Runes)
+				m.inputErr = ""
 			}
 		}
 
@@ -332,7 +350,7 @@ func (m model) renderLeft() string {
 	case stateSelectTo:
 		sb.WriteString(titleStyle.Render("Select TO node") + "\n")
 		sb.WriteString(dimStyle.Render(fmt.Sprintf("from: %s", m.fromNode.Name)) + "\n\n")
-		renderNodeList(&sb, m.nodes, m.cursor)
+		renderNodeList(&sb, m.targets(), m.cursor)
 
 	case stateInputMsg:
 		title := "Send message"
@@ -346,7 +364,11 @@ func (m model) renderLeft() string {
 			sb.WriteString(dimStyle.Render(fmt.Sprintf("%s → all nodes", m.fromNode.Name)) + "\n\n")
 		}
 		sb.WriteString("Message:\n")
-		sb.WriteString("> " + m.inputMsg + "█\n\n")
+		sb.WriteString("> " + m.inputMsg + "█\n")
+		if m.inputErr != "" {
+			sb.WriteString(errorStyle.Render(m.inputErr) + "\n")
+		}
+		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render("enter send  esc cancel"))
 
 	case stateResult:
