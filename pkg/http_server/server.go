@@ -6,21 +6,18 @@ import (
 	"net/http"
 	"node_messager/pkg/hub"
 	"node_messager/pkg/logger"
+	"node_messager/pkg/node"
 	"time"
 )
 
 type httpServer struct {
-	srv *http.Server
-	mux *http.ServeMux
+	node node.Node
+	srv  *http.Server
+	mux  *http.ServeMux
 }
 
-var (
-	defaultHost = "localhost"
-	defaultPort = 8080
-)
-
-func NewHttpServer(host string, port int) *httpServer {
-	addr := formattAddress(host, port)
+func NewHttpServer(n node.Node) *httpServer {
+	addr := fmt.Sprintf("%s:%d", n.Host, n.Port)
 	mux := http.NewServeMux()
 
 	srv := &http.Server{
@@ -30,7 +27,7 @@ func NewHttpServer(host string, port int) *httpServer {
 		IdleTimeout: 100 * time.Second,
 	}
 
-	return &httpServer{srv, mux}
+	return &httpServer{node: n, srv: srv, mux: mux}
 }
 
 func (s *httpServer) AddRoute(method, path string, handler http.HandlerFunc) {
@@ -38,21 +35,11 @@ func (s *httpServer) AddRoute(method, path string, handler http.HandlerFunc) {
 	s.mux.HandleFunc(pattern, handler)
 }
 
-func formattAddress(host string, port int) string {
-	if port == 0 {
-		port = defaultPort
-	}
-	if host == "" {
-		host = defaultHost
-	}
-	return fmt.Sprintf("%s:%d", host, port)
-}
-
 func (s *httpServer) Start(ctx context.Context) error {
 	l := logger.GetContextLogger(ctx)
-	h := hub.New(l)
+	h := hub.New(s.node.Name, l)
 	s.mux.HandleFunc("/ws", h.ServeWs)
 	go h.Run()
-	l.Infof("start server on %s", s.srv.Addr)
+	l.Infof("[%s] listening on %s", s.node.Name, s.srv.Addr)
 	return s.srv.ListenAndServe()
 }
