@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"node_messager/pkg/hub"
 	"node_messager/pkg/logger"
 	"time"
 )
@@ -49,6 +50,9 @@ func formattAddress(host string, port int) string {
 
 func (s *httpServer) Start(ctx context.Context) error {
 	l := logger.GetContextLogger(ctx)
+	h := hub.New(l)
+	s.mux.HandleFunc("/ws", h.ServeWs)
+	go h.Run()
 	l.Infof("start server on %s", s.srv.Addr)
 	return s.srv.ListenAndServe()
 }
