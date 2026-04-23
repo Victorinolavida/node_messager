@@ -49,6 +49,6 @@ func formattAddress(host string, port int) string {
 
 func (s *httpServer) Start(ctx context.Context) error {
 	l := logger.GetContextLogger(ctx)
-	l.Info("start server on %s", s.srv.Addr)
+	l.Infof("start server on %s", s.srv.Addr)
 	return s.srv.ListenAndServe()
 }
