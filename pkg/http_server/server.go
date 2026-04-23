@@ -6,17 +6,19 @@ import (
 	"net/http"
 	"node_messager/pkg/hub"
 	"node_messager/pkg/logger"
+	"node_messager/pkg/msgstore"
 	"node_messager/pkg/node"
 	"time"
 )
 
 type httpServer struct {
-	node node.Node
-	srv  *http.Server
-	mux  *http.ServeMux
+	node  node.Node
+	srv   *http.Server
+	mux   *http.ServeMux
+	store *msgstore.Store
 }
 
-func NewHttpServer(n node.Node) *httpServer {
+func NewHttpServer(n node.Node, store *msgstore.Store) *httpServer {
 	addr := fmt.Sprintf("%s:%d", n.Host, n.Port)
 	mux := http.NewServeMux()
 
@@ -27,7 +29,7 @@ func NewHttpServer(n node.Node) *httpServer {
 		IdleTimeout: 100 * time.Second,
 	}
 
-	return &httpServer{node: n, srv: srv, mux: mux}
+	return &httpServer{node: n, srv: srv, mux: mux, store: store}
 }
 
 func (s *httpServer) AddRoute(method, path string, handler http.HandlerFunc) {
@@ -37,7 +39,7 @@ func (s *httpServer) AddRoute(method, path string, handler http.HandlerFunc) {
 
 func (s *httpServer) Start(ctx context.Context) error {
 	l := logger.GetContextLogger(ctx)
-	h := hub.New(s.node.Name, l)
+	h := hub.New(s.node.Name, l, s.store)
 	s.mux.HandleFunc("/ws", h.ServeWs)
 	go h.Run()
 	l.Infof("[%s] listening on %s", s.node.Name, s.srv.Addr)

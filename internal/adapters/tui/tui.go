@@ -1,11 +1,16 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"node_messager/internal/entities"
+	"node_messager/pkg/dto"
 	"node_messager/pkg/logbuffer"
+	"node_messager/pkg/msgstore"
 	"node_messager/pkg/node"
 	"node_messager/pkg/wsclient"
 
@@ -27,6 +32,7 @@ const (
 	stateSelectFrom
 	stateSelectTo
 	stateInputMsg
+	stateSelectLogNode
 	stateResult
 )
 
@@ -36,6 +42,7 @@ const (
 	actionSend menuAction = iota
 	actionBroadcast
 	actionListNodes
+	actionViewLogs
 )
 
 // ── styles ────────────────────────────────────────────────────────────────────
@@ -87,14 +94,16 @@ type model struct {
 
 	logBuffer *logbuffer.Buffer
 	logs      []string
+	stores    map[int]*msgstore.Store
 }
 
-func initialModel(buf *logbuffer.Buffer, nodes []node.Node) model {
+func initialModel(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgstore.Store) model {
 	return model{
-		choices:   []string{"Send a message", "Broadcast a message", "List all nodes", "Quit"},
+		choices:   []string{"Send a message", "Broadcast a message", "View node logs", "List all nodes", "Quit"},
 		state:     stateMenu,
 		logBuffer: buf,
 		nodes:     nodes,
+		stores:    stores,
 	}
 }
 
@@ -115,21 +124,33 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-func sendMsgCmd(from, to node.Node, msg string) tea.Cmd {
+func sendMsgCmd(from, to node.Node, content string) tea.Cmd {
 	return func() tea.Msg {
 		c, err := wsclient.Connect(to.Host, to.Port)
 		if err != nil {
 			return sendResultMsg{err: err}
 		}
 		defer c.Close()
-		payload := fmt.Sprintf("[from:%s → to:%s] %s", from.Name, to.Name, msg)
-		return sendResultMsg{err: c.Send([]byte(payload))}
+		m := dto.Message{
+			ID:        uuid.New().String(),
+			Type:      string(entities.MSG),
+			FromNode:  from.Name,
+			ToNode:    to.Name,
+			Content:   content,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		}
+		data, err := json.Marshal(m)
+		if err != nil {
+			return sendResultMsg{err: err}
+		}
+		return sendResultMsg{err: c.Send(data)}
 	}
 }
 
-func broadcastCmd(from node.Node, nodes []node.Node, msg string) tea.Cmd {
+func broadcastCmd(from node.Node, nodes []node.Node, content string) tea.Cmd {
 	return func() tea.Msg {
-		payload := fmt.Sprintf("[broadcast from:%s] %s", from.Name, msg)
+		id := uuid.New().String()
+		now := time.Now().UTC().Format(time.RFC3339)
 		var errs []string
 		for _, n := range nodes {
 			c, err := wsclient.Connect(n.Host, n.Port)
@@ -137,7 +158,16 @@ func broadcastCmd(from node.Node, nodes []node.Node, msg string) tea.Cmd {
 				errs = append(errs, fmt.Sprintf("%s: %v", n.Name, err))
 				continue
 			}
-			if err := c.Send([]byte(payload)); err != nil {
+			m := dto.Message{
+				ID:        id,
+				Type:      string(entities.BROADCAST),
+				FromNode:  from.Name,
+				ToNode:    n.Name,
+				Content:   content,
+				CreatedAt: now,
+			}
+			data, _ := json.Marshal(m)
+			if err := c.Send(data); err != nil {
 				errs = append(errs, fmt.Sprintf("%s: %v", n.Name, err))
 			}
 			c.Close()
@@ -209,15 +239,18 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.action = actionBroadcast
 				m.state = stateSelectFrom
 			case 2:
+				m.action = actionViewLogs
+				m.state = stateSelectLogNode
+			case 3:
 				m.action = actionListNodes
 				lines := make([]string, len(m.nodes))
 				for i, n := range m.nodes {
-					lines[i] = fmt.Sprintf("  %-8s", n.Name)
+					lines[i] = fmt.Sprintf("  %-8s  %s:%d  (ws://%s:%d/ws)", n.Name, n.Host, n.Port, n.Host, n.Port)
 				}
 				m.result = strings.Join(lines, "\n")
 				m.resultErr = false
 				m.state = stateResult
-			case 3:
+			case 4:
 				return m, tea.Quit
 			}
 		}
@@ -295,6 +328,28 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case stateSelectLogNode:
+		switch msg.String() {
+		case "ctrl+c", "esc":
+			m.cursor = 0
+			m.state = stateMenu
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(m.nodes)-1 {
+				m.cursor++
+			}
+		case "enter":
+			n := m.nodes[m.cursor]
+			entries, _ := m.stores[n.ID].Latest(50)
+			m.result = formatEntries(n.Name, entries)
+			m.resultErr = false
+			m.cursor = 0
+			m.state = stateResult
+		}
+
 	case stateResult:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -305,6 +360,22 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func formatEntries(nodeName string, entries []msgstore.Entry) string {
+	if len(entries) == 0 {
+		return fmt.Sprintf("No messages for %s yet.", nodeName)
+	}
+	var sb strings.Builder
+	for _, e := range entries {
+		fmt.Fprintf(&sb, "%s  %-10s  from=%-8s  %q\n",
+			e.ReceivedAt.Format(time.RFC3339),
+			e.Msg.Type,
+			e.Msg.FromNode,
+			e.Msg.Content,
+		)
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // ── view ──────────────────────────────────────────────────────────────────────
@@ -345,6 +416,10 @@ func (m model) renderLeft() string {
 
 	case stateSelectFrom:
 		sb.WriteString(titleStyle.Render("Select FROM node") + "\n")
+		renderNodeList(&sb, m.nodes, m.cursor)
+
+	case stateSelectLogNode:
+		sb.WriteString(titleStyle.Render("View logs for node") + "\n")
 		renderNodeList(&sb, m.nodes, m.cursor)
 
 	case stateSelectTo:
@@ -417,7 +492,7 @@ func (m model) renderLogs(height int) string {
 
 // ── constructor ───────────────────────────────────────────────────────────────
 
-func NewTui(buf *logbuffer.Buffer, nodes []node.Node) (tea.Model, error) {
-	p := tea.NewProgram(initialModel(buf, nodes), tea.WithAltScreen())
+func NewTui(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgstore.Store) (tea.Model, error) {
+	p := tea.NewProgram(initialModel(buf, nodes, stores), tea.WithAltScreen())
 	return p.Run()
 }
