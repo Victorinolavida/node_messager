@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"io"
 	"log"
 	"os"
 	"sync"
@@ -87,6 +88,33 @@ func GetContextLogger(ctx context.Context) *zap.SugaredLogger {
 
 func SetContextLogger(ctx context.Context, log *zap.SugaredLogger) context.Context {
 	return context.WithValue(ctx, loggerContextKey, log)
+}
+
+// NewLoggerToWriter creates a logger that writes to w instead of stdout.
+func NewLoggerToWriter(w io.Writer, debugMode bool) *zap.SugaredLogger {
+	encoderConfig := zapcore.EncoderConfig{
+		TimeKey:        "time",
+		LevelKey:       "level",
+		NameKey:        "logger",
+		CallerKey:      "caller",
+		MessageKey:     "msg",
+		StacktraceKey:  "stacktrace",
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapcore.CapitalColorLevelEncoder,
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
+		EncodeDuration: zapcore.StringDurationEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder,
+	}
+	logLevel := zapcore.InfoLevel
+	if debugMode {
+		logLevel = zapcore.DebugLevel
+	}
+	core := zapcore.NewCore(
+		zapcore.NewConsoleEncoder(encoderConfig),
+		zapcore.AddSync(w),
+		logLevel,
+	)
+	return zap.New(core, zap.AddCaller()).Sugar()
 }
 
 func NewLogger(params ...bool) *zap.SugaredLogger {
