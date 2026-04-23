@@ -19,8 +19,8 @@ var (
 	loggerContextKey loggerKey = loggerKey("ctx_logger")
 )
 
-func newLogger(debugMode, prettyLog bool) *zap.SugaredLogger {
-	encoderConfig := zapcore.EncoderConfig{
+func newEncoderConfig() zapcore.EncoderConfig {
+	return zapcore.EncoderConfig{
 		TimeKey:        "time",
 		LevelKey:       "level",
 		NameKey:        "logger",
@@ -32,21 +32,67 @@ func newLogger(debugMode, prettyLog bool) *zap.SugaredLogger {
 		EncodeDuration: zapcore.StringDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
+}
+
+func newLogger(debugMode, prettyLog bool) *zap.SugaredLogger {
+	cfg := newEncoderConfig()
 	if prettyLog {
-		encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		cfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	} else {
+		cfg.EncodeLevel = zapcore.CapitalLevelEncoder
 	}
+	logLevel := zapcore.InfoLevel
+	if debugMode {
+		logLevel = zapcore.DebugLevel
+	}
+	core := zapcore.NewCore(
+		zapcore.NewConsoleEncoder(cfg),
+		zapcore.Lock(os.Stdout),
+		logLevel,
+	)
+	return zap.New(core, zap.AddCaller()).Sugar()
+}
 
-	consoleEncoder := zapcore.NewConsoleEncoder(encoderConfig)
+// NewLoggerToWriter writes to w with ANSI colors.
+func NewLoggerToWriter(w io.Writer, debugMode bool) *zap.SugaredLogger {
+	cfg := newEncoderConfig()
+	cfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	logLevel := zapcore.InfoLevel
+	if debugMode {
+		logLevel = zapcore.DebugLevel
+	}
+	core := zapcore.NewCore(
+		zapcore.NewConsoleEncoder(cfg),
+		zapcore.AddSync(w),
+		logLevel,
+	)
+	return zap.New(core, zap.AddCaller()).Sugar()
+}
 
+// NewLoggerForNode fans out to tuiWriter (ANSI colors) and fileWriter (plain text).
+func NewLoggerForNode(tuiWriter, fileWriter io.Writer, debugMode bool) *zap.SugaredLogger {
 	logLevel := zapcore.InfoLevel
 	if debugMode {
 		logLevel = zapcore.DebugLevel
 	}
 
-	consoleOutput := zapcore.Lock(os.Stdout)
-	core := zapcore.NewCore(consoleEncoder, consoleOutput, logLevel)
+	tuiCfg := newEncoderConfig()
+	tuiCfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	tuiCore := zapcore.NewCore(
+		zapcore.NewConsoleEncoder(tuiCfg),
+		zapcore.AddSync(tuiWriter),
+		logLevel,
+	)
 
-	return zap.New(core, zap.AddCaller()).Sugar()
+	fileCfg := newEncoderConfig()
+	fileCfg.EncodeLevel = zapcore.CapitalLevelEncoder
+	fileCore := zapcore.NewCore(
+		zapcore.NewConsoleEncoder(fileCfg),
+		zapcore.AddSync(fileWriter),
+		logLevel,
+	)
+
+	return zap.New(zapcore.NewTee(tuiCore, fileCore), zap.AddCaller()).Sugar()
 }
 
 func GetGlobalLogger(params ...bool) *zap.SugaredLogger {
@@ -88,33 +134,6 @@ func GetContextLogger(ctx context.Context) *zap.SugaredLogger {
 
 func SetContextLogger(ctx context.Context, log *zap.SugaredLogger) context.Context {
 	return context.WithValue(ctx, loggerContextKey, log)
-}
-
-// NewLoggerToWriter creates a logger that writes to w instead of stdout.
-func NewLoggerToWriter(w io.Writer, debugMode bool) *zap.SugaredLogger {
-	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:        "time",
-		LevelKey:       "level",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		MessageKey:     "msg",
-		StacktraceKey:  "stacktrace",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.CapitalColorLevelEncoder,
-		EncodeTime:     zapcore.ISO8601TimeEncoder,
-		EncodeDuration: zapcore.StringDurationEncoder,
-		EncodeCaller:   zapcore.ShortCallerEncoder,
-	}
-	logLevel := zapcore.InfoLevel
-	if debugMode {
-		logLevel = zapcore.DebugLevel
-	}
-	core := zapcore.NewCore(
-		zapcore.NewConsoleEncoder(encoderConfig),
-		zapcore.AddSync(w),
-		logLevel,
-	)
-	return zap.New(core, zap.AddCaller()).Sugar()
 }
 
 func NewLogger(params ...bool) *zap.SugaredLogger {
