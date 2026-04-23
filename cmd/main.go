@@ -14,6 +14,9 @@ import (
 	"node_messager/pkg/node"
 )
 
+// overridden at build time: go build -ldflags "-X main.debug=false" ./cmd
+var debug = "true"
+
 var nodes = []node.Node{
 	{ID: 0, Name: "alpha", Host: "127.0.0.1", Port: 5000},
 	{ID: 1, Name: "beta", Host: "127.0.0.1", Port: 5001},
@@ -27,6 +30,8 @@ func main() {
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		startupLog.Fatalf("create logs dir: %v", err)
 	}
+
+	debugMode := debug == "true"
 
 	buf := logbuffer.New(500)
 	stores := make(map[int]*msgstore.Store, len(nodes))
@@ -43,7 +48,7 @@ func main() {
 			startupLog.Fatalf("[%s] open log file: %v", n.Name, err)
 		}
 
-		nodeLog := logger.NewLoggerForNode(buf, f, true)
+		nodeLog := logger.NewLoggerForNode(buf, f, debugMode)
 		nodeCtx := logger.SetContextLogger(context.Background(), nodeLog)
 
 		wg.Add(1)
