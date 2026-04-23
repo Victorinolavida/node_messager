@@ -299,8 +299,8 @@ func (m model) View() string {
 	const hOverhead = 4
 	const vOverhead = 2
 
-	leftW := m.width/2 - hOverhead
-	rightW := m.width - m.width/2 - hOverhead
+	leftW := m.width/4 - hOverhead
+	rightW := m.width - m.width/4 - hOverhead
 	innerH := m.height - vOverhead
 
 	left := panelStyle.Width(leftW).Height(innerH).Render(m.renderLeft())
