@@ -28,13 +28,20 @@ func main() {
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		startupLog.Fatalf("create logs dir: %v", err)
 	}
+	if err := os.MkdirAll("messages", 0755); err != nil {
+		startupLog.Fatalf("create messages dir: %v", err)
+	}
 
 	debugMode := debug == "true"
 
 	buf := logbuffer.New(500)
 	stores := make(map[int]*msgstore.Store, len(nodes))
 	for _, n := range nodes {
-		stores[n.ID] = msgstore.New(50)
+		store, err := msgstore.NewWithFile(50, fmt.Sprintf("messages/%s.jsonl", n.Name))
+		if err != nil {
+			startupLog.Fatalf("[%s] open message file: %v", n.Name, err)
+		}
+		stores[n.ID] = store
 	}
 
 	var wg sync.WaitGroup

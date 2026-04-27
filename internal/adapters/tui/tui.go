@@ -124,7 +124,7 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-func sendMsgCmd(from, to node.Node, content string) tea.Cmd {
+func sendMsgCmd(from, to node.Node, content string, store *msgstore.Store) tea.Cmd {
 	return func() tea.Msg {
 		c, err := wsclient.Connect(to.Host, to.Port)
 		if err != nil {
@@ -132,22 +132,26 @@ func sendMsgCmd(from, to node.Node, content string) tea.Cmd {
 		}
 		defer c.Close()
 		m := dto.Message{
-			ID:        uuid.New().String(),
-			Type:      string(entities.MSG),
-			FromNode:  from.Name,
-			ToNode:    to.Name,
-			Content:   content,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			ID:       uuid.New().String(),
+			Type:     string(entities.MSG),
+			FromNode: from.Name,
+			ToNode:   to.Name,
+			Content:  content,
+			SendAt:   time.Now().UTC().Format(time.RFC3339),
 		}
 		data, err := json.Marshal(m)
 		if err != nil {
 			return sendResultMsg{err: err}
 		}
-		return sendResultMsg{err: c.Send(data)}
+		if err := c.Send(data); err != nil {
+			return sendResultMsg{err: err}
+		}
+		store.Save(m, msgstore.Sent) //nolint:errcheck
+		return sendResultMsg{}
 	}
 }
 
-func broadcastCmd(from node.Node, nodes []node.Node, content string) tea.Cmd {
+func broadcastCmd(from node.Node, nodes []node.Node, content string, store *msgstore.Store) tea.Cmd {
 	return func() tea.Msg {
 		id := uuid.New().String()
 		now := time.Now().UTC().Format(time.RFC3339)
@@ -159,16 +163,18 @@ func broadcastCmd(from node.Node, nodes []node.Node, content string) tea.Cmd {
 				continue
 			}
 			m := dto.Message{
-				ID:        id,
-				Type:      string(entities.BROADCAST),
-				FromNode:  from.Name,
-				ToNode:    n.Name,
-				Content:   content,
-				CreatedAt: now,
+				ID:       id,
+				Type:     string(entities.BROADCAST),
+				FromNode: from.Name,
+				ToNode:   n.Name,
+				Content:  content,
+				SendAt:   now,
 			}
 			data, _ := json.Marshal(m)
 			if err := c.Send(data); err != nil {
 				errs = append(errs, fmt.Sprintf("%s: %v", n.Name, err))
+			} else {
+				store.Save(m, msgstore.Sent) //nolint:errcheck
 			}
 			c.Close()
 		}
@@ -312,9 +318,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.inputErr = ""
 			if m.action == actionSend {
-				return m, sendMsgCmd(m.fromNode, m.toNode, m.inputMsg)
+				return m, sendMsgCmd(m.fromNode, m.toNode, m.inputMsg, m.stores[m.fromNode.ID])
 			}
-			return m, broadcastCmd(m.fromNode, m.nodes, m.inputMsg)
+			return m, broadcastCmd(m.fromNode, m.nodes, m.inputMsg, m.stores[m.fromNode.ID])
 		case "backspace":
 			if len(m.inputMsg) > 0 {
 				runes := []rune(m.inputMsg)
@@ -368,10 +374,12 @@ func formatEntries(nodeName string, entries []msgstore.Entry) string {
 	}
 	var sb strings.Builder
 	for _, e := range entries {
-		fmt.Fprintf(&sb, "%s  %-10s  from=%-8s  %q\n",
-			e.ReceivedAt.Format(time.RFC3339),
+		fmt.Fprintf(&sb, "%s  %-10s  %-10s  from=%-8s  to=%-8s  %q\n",
+			e.At.Format(time.RFC3339),
+			e.Type,
 			e.Msg.Type,
 			e.Msg.FromNode,
+			e.Msg.ToNode,
 			e.Msg.Content,
 		)
 	}
