@@ -82,6 +82,7 @@ type model struct {
 	nodes    []node.Node
 	fromNode node.Node
 	toNode   node.Node
+	hostNode *node.Node
 
 	inputMsg string
 	inputErr string
@@ -97,13 +98,14 @@ type model struct {
 	stores    map[int]*msgstore.Store
 }
 
-func initialModel(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgstore.Store) model {
+func initialModel(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node) model {
 	return model{
 		choices:   []string{"Send a message", "Broadcast a message", "View node logs", "List all nodes", "Quit"},
 		state:     stateMenu,
 		logBuffer: buf,
 		nodes:     nodes,
 		stores:    stores,
+		hostNode:  hostNode,
 	}
 }
 
@@ -124,7 +126,7 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-func sendMsgCmd(from, to node.Node, content string, store *msgstore.Store) tea.Cmd {
+func sendMsgCmd(from, to node.Node, content string, stores map[int]*msgstore.Store) tea.Cmd {
 	return func() tea.Msg {
 		c, err := wsclient.Connect(to.Host, to.Port)
 		if err != nil {
@@ -146,12 +148,17 @@ func sendMsgCmd(from, to node.Node, content string, store *msgstore.Store) tea.C
 		if err := c.Send(data); err != nil {
 			return sendResultMsg{err: err}
 		}
-		store.Save(m, msgstore.Sent) //nolint:errcheck
+		if s, ok := stores[from.ID]; ok {
+			s.Save(m, msgstore.Sent) //nolint:errcheck
+		}
+		if s, ok := stores[to.ID]; ok {
+			s.Save(m, msgstore.Received) //nolint:errcheck
+		}
 		return sendResultMsg{}
 	}
 }
 
-func broadcastCmd(from node.Node, nodes []node.Node, content string, store *msgstore.Store) tea.Cmd {
+func broadcastCmd(from node.Node, nodes []node.Node, content string, stores map[int]*msgstore.Store) tea.Cmd {
 	return func() tea.Msg {
 		id := uuid.New().String()
 		now := time.Now().UTC().Format(time.RFC3339)
@@ -174,7 +181,12 @@ func broadcastCmd(from node.Node, nodes []node.Node, content string, store *msgs
 			if err := c.Send(data); err != nil {
 				errs = append(errs, fmt.Sprintf("%s: %v", n.Name, err))
 			} else {
-				store.Save(m, msgstore.Sent) //nolint:errcheck
+				if s, ok := stores[from.ID]; ok {
+					s.Save(m, msgstore.Sent) //nolint:errcheck
+				}
+				if s, ok := stores[n.ID]; ok {
+					s.Save(m, msgstore.Received) //nolint:errcheck
+				}
 			}
 			c.Close()
 		}
@@ -240,13 +252,31 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch choice {
 			case 0:
 				m.action = actionSend
-				m.state = stateSelectFrom
+				if m.hostNode != nil {
+					m.fromNode = *m.hostNode
+					m.state = stateSelectTo
+				} else {
+					m.state = stateSelectFrom
+				}
 			case 1:
 				m.action = actionBroadcast
-				m.state = stateSelectFrom
+				if m.hostNode != nil {
+					m.fromNode = *m.hostNode
+					m.inputMsg = ""
+					m.state = stateInputMsg
+				} else {
+					m.state = stateSelectFrom
+				}
 			case 2:
 				m.action = actionViewLogs
-				m.state = stateSelectLogNode
+				if m.hostNode != nil {
+					entries, _ := m.stores[m.hostNode.ID].Latest(50)
+					m.result = formatEntries(m.hostNode.Name, entries, true)
+					m.resultErr = false
+					m.state = stateResult
+				} else {
+					m.state = stateSelectLogNode
+				}
 			case 3:
 				m.action = actionListNodes
 				lines := make([]string, len(m.nodes))
@@ -318,9 +348,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.inputErr = ""
 			if m.action == actionSend {
-				return m, sendMsgCmd(m.fromNode, m.toNode, m.inputMsg, m.stores[m.fromNode.ID])
+				return m, sendMsgCmd(m.fromNode, m.toNode, m.inputMsg, m.stores)
 			}
-			return m, broadcastCmd(m.fromNode, m.nodes, m.inputMsg, m.stores[m.fromNode.ID])
+			return m, broadcastCmd(m.fromNode, m.nodes, m.inputMsg, m.stores)
 		case "backspace":
 			if len(m.inputMsg) > 0 {
 				runes := []rune(m.inputMsg)
@@ -350,7 +380,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			n := m.nodes[m.cursor]
 			entries, _ := m.stores[n.ID].Latest(50)
-			m.result = formatEntries(n.Name, entries)
+			m.result = formatEntries(n.Name, entries, false)
 			m.resultErr = false
 			m.cursor = 0
 			m.state = stateResult
@@ -368,12 +398,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func formatEntries(nodeName string, entries []msgstore.Entry) string {
-	if len(entries) == 0 {
-		return fmt.Sprintf("No messages for %s yet.", nodeName)
-	}
+func formatEntries(nodeName string, entries []msgstore.Entry, sentOnly bool) string {
 	var sb strings.Builder
 	for _, e := range entries {
+		if sentOnly && e.Type != msgstore.Sent {
+			continue
+		}
 		fmt.Fprintf(&sb, "%s  %-10s  %-10s  from=%-8s  to=%-8s  %q\n",
 			e.At.Format(time.RFC3339),
 			e.Type,
@@ -382,6 +412,9 @@ func formatEntries(nodeName string, entries []msgstore.Entry) string {
 			e.Msg.ToNode,
 			e.Msg.Content,
 		)
+	}
+	if sb.Len() == 0 {
+		return fmt.Sprintf("No messages for %s yet.", nodeName)
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
@@ -500,7 +533,7 @@ func (m model) renderLogs(height int) string {
 
 // ── constructor ───────────────────────────────────────────────────────────────
 
-func NewTui(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgstore.Store) (tea.Model, error) {
-	p := tea.NewProgram(initialModel(buf, nodes, stores), tea.WithAltScreen())
+func NewTui(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node) (tea.Model, error) {
+	p := tea.NewProgram(initialModel(buf, nodes, stores, hostNode), tea.WithAltScreen())
 	return p.Run()
 }

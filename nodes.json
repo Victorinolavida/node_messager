@@ -1,8 +1,6 @@
 {
   "nodes": [
-    {"id": 0, "name": "alpha", "host": "127.0.0.1", "port": 5000},
-    {"id": 1, "name": "beta",  "host": "127.0.0.1", "port": 5001},
-    {"id": 2, "name": "gamma", "host": "127.0.0.1", "port": 5002},
-    {"id": 3, "name": "delta", "host": "127.0.0.1", "port": 5003}
-  ]
+    { "id": 1, "name": "linux", "host": "192.168.100.52", "port": 5000 }
+  ],
+  "host": { "id": 0, "name": "mac", "host": "192.168.100.97", "port": 5000 }
 }

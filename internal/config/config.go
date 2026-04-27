@@ -8,14 +8,26 @@ import (
 	"node_messager/pkg/node"
 )
 
-func LoadNodes(path string) ([]node.Node, error) {
+type Config struct {
+	Nodes    []node.Node
+	HostNode *node.Node
+}
+
+func LoadConfig(path string) (Config, error) {
 	k := koanf.New(".")
 	if err := k.Load(file.Provider(path), kjson.Parser()); err != nil {
-		return nil, err
+		return Config{}, err
 	}
-	var nodes []node.Node
-	if err := k.Unmarshal("nodes", &nodes); err != nil {
-		return nil, err
+	var cfg Config
+	if err := k.Unmarshal("nodes", &cfg.Nodes); err != nil {
+		return Config{}, err
 	}
-	return nodes, nil
+	if k.Exists("host") {
+		var h node.Node
+		if err := k.Unmarshal("host", &h); err != nil {
+			return Config{}, err
+		}
+		cfg.HostNode = &h
+	}
+	return cfg, nil
 }
