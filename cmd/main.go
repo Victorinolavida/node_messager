@@ -7,25 +7,23 @@ import (
 	"sync"
 
 	"node_messager/internal/adapters/tui"
+	"node_messager/internal/config"
 	httpserver "node_messager/pkg/http_server"
 	"node_messager/pkg/logbuffer"
 	logger "node_messager/pkg/logger"
 	"node_messager/pkg/msgstore"
-	"node_messager/pkg/node"
 )
 
 // overridden at build time: go build -ldflags "-X main.debug=false" ./cmd
 var debug = "true"
 
-var nodes = []node.Node{
-	{ID: 0, Name: "alpha", Host: "127.0.0.1", Port: 5000},
-	{ID: 1, Name: "beta", Host: "127.0.0.1", Port: 5001},
-	{ID: 2, Name: "gamma", Host: "127.0.0.1", Port: 5002},
-	{ID: 3, Name: "delta", Host: "127.0.0.1", Port: 5003},
-}
-
 func main() {
 	startupLog := logger.NewLogger(true, true)
+
+	nodes, err := config.LoadNodes("nodes.json")
+	if err != nil {
+		startupLog.Fatalf("load nodes: %v", err)
+	}
 
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		startupLog.Fatalf("create logs dir: %v", err)
@@ -62,7 +60,7 @@ func main() {
 	}
 	wg.Wait()
 
-	_, err := tui.NewTui(buf, nodes, stores)
+	_, err = tui.NewTui(buf, nodes, stores)
 	if err != nil {
 		startupLog.Fatalf("error initializing tui: %v", err)
 	}
