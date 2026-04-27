@@ -50,13 +50,13 @@ func (h *Hub) Run() {
 		select {
 		case c := <-h.register:
 			h.clients[c] = true
-			h.log.Infof("[%s] client connected, total=%d", h.name, len(h.clients))
+			h.log.Debugf("[%s] client connected, total=%d", h.name, len(h.clients))
 
 		case c := <-h.unregister:
 			if _, ok := h.clients[c]; ok {
 				delete(h.clients, c)
 				close(c.send)
-				h.log.Infof("[%s] client disconnected, total=%d", h.name, len(h.clients))
+				h.log.Debugf("[%s] client disconnected, total=%d", h.name, len(h.clients))
 			}
 
 		case data := <-h.broadcast:
@@ -117,7 +117,7 @@ func (c *Client) writePump() {
 		}
 		var msg dto.Message
 		if err := json.Unmarshal(data, &msg); err == nil {
-			c.hub.log.Infof("[%s] ack   id=%s at=%s",
+			c.hub.log.Debugf("[%s] ack   id=%s at=%s",
 				c.hub.name, msg.ID, time.Now().UTC().Format(time.RFC3339))
 		}
 	}
