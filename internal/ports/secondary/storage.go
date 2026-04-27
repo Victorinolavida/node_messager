@@ -6,6 +6,6 @@ import (
 )
 
 type StoragePort interface {
-	Save(msg dto.Message) error
+	Save(msg dto.Message, t msgstore.EntryType) error
 	Latest(n int) ([]msgstore.Entry, error)
 }
