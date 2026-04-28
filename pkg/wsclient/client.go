@@ -11,6 +11,7 @@ type Client struct {
 	mu   sync.Mutex
 	conn *websocket.Conn
 	Recv chan []byte
+	done chan struct{}
 }
 
 func Connect(host string, port int) (*Client, error) {
@@ -22,9 +23,19 @@ func Connect(host string, port int) (*Client, error) {
 	c := &Client{
 		conn: conn,
 		Recv: make(chan []byte, 256),
+		done: make(chan struct{}),
 	}
 	go c.readLoop()
 	return c, nil
+}
+
+func (c *Client) IsClosed() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Client) Send(msg []byte) error {
@@ -39,6 +50,7 @@ func (c *Client) Close() error {
 
 func (c *Client) readLoop() {
 	defer close(c.Recv)
+	defer close(c.done)
 	for {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {

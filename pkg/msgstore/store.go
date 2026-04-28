@@ -1,6 +1,7 @@
 package msgstore
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"sync"
@@ -34,11 +35,38 @@ func New(max int) *Store {
 }
 
 func NewWithFile(max int, path string) (*Store, error) {
+	existing := loadFromFile(path, max)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{max: max, entries: make([]Entry, 0, max), file: f}, nil
+	return &Store{max: max, entries: existing, file: f}, nil
+}
+
+func loadFromFile(path string, max int) []Entry {
+	f, err := os.Open(path)
+	if err != nil {
+		return make([]Entry, 0, max)
+	}
+	defer f.Close()
+
+	var entries []Entry
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var e Entry
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	if len(entries) > max {
+		entries = entries[len(entries)-max:]
+	}
+	return entries
 }
 
 func (s *Store) Save(msg dto.Message, t EntryType) error {

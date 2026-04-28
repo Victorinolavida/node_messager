@@ -43,19 +43,25 @@ func main() {
 		serveNodes = []node.Node{*cfg.HostNode}
 	}
 
-	// Create stores for all nodes so every node gets a message file,
-	// including remote nodes that don't run a local server.
+	// When host is defined, only the host node's store is file-backed — remote
+	// nodes run on other machines so a local file would not reflect their real state.
+	// When no host is defined (dev mode), all nodes get file-backed stores.
 	allNodes := append([]node.Node{}, cfg.Nodes...)
 	if cfg.HostNode != nil {
 		allNodes = append(allNodes, *cfg.HostNode)
 	}
 	stores := make(map[int]*msgstore.Store, len(allNodes))
 	for _, n := range allNodes {
-		store, err := msgstore.NewWithFile(50, fmt.Sprintf("messages/%s.jsonl", n.Name))
-		if err != nil {
-			startupLog.Fatalf("[%s] open message file: %v", n.Name, err)
+		isLocal := cfg.HostNode == nil || n.ID == cfg.HostNode.ID
+		if isLocal {
+			store, err := msgstore.NewWithFile(50, fmt.Sprintf("messages/%s.jsonl", n.Name))
+			if err != nil {
+				startupLog.Fatalf("[%s] open message file: %v", n.Name, err)
+			}
+			stores[n.ID] = store
+		} else {
+			stores[n.ID] = msgstore.New(50)
 		}
-		stores[n.ID] = store
 	}
 
 	var wg sync.WaitGroup

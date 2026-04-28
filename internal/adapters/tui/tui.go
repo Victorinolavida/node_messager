@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +18,31 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// ── connection pool ───────────────────────────────────────────────────────────
+
+type connPool struct {
+	mu    sync.Mutex
+	conns map[int]*wsclient.Client
+}
+
+func newConnPool() *connPool {
+	return &connPool{conns: make(map[int]*wsclient.Client)}
+}
+
+func (p *connPool) get(n node.Node) (*wsclient.Client, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if c, ok := p.conns[n.ID]; ok && !c.IsClosed() {
+		return c, nil
+	}
+	c, err := wsclient.Connect(n.Host, n.Port)
+	if err != nil {
+		return nil, err
+	}
+	p.conns[n.ID] = c
+	return c, nil
+}
 
 // ── messages ──────────────────────────────────────────────────────────────────
 
@@ -96,6 +122,7 @@ type model struct {
 	logBuffer *logbuffer.Buffer
 	logs      []string
 	stores    map[int]*msgstore.Store
+	pool      *connPool
 }
 
 func initialModel(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node) model {
@@ -106,6 +133,7 @@ func initialModel(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgs
 		nodes:     nodes,
 		stores:    stores,
 		hostNode:  hostNode,
+		pool:      newConnPool(),
 	}
 }
 
@@ -126,13 +154,12 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-func sendMsgCmd(from, to node.Node, content string, stores map[int]*msgstore.Store) tea.Cmd {
+func sendMsgCmd(from, to node.Node, content string, stores map[int]*msgstore.Store, pool *connPool) tea.Cmd {
 	return func() tea.Msg {
-		c, err := wsclient.Connect(to.Host, to.Port)
+		c, err := pool.get(to)
 		if err != nil {
 			return sendResultMsg{err: err}
 		}
-		defer c.Close()
 		m := dto.Message{
 			ID:       uuid.New().String(),
 			Type:     string(entities.MSG),
@@ -158,13 +185,13 @@ func sendMsgCmd(from, to node.Node, content string, stores map[int]*msgstore.Sto
 	}
 }
 
-func broadcastCmd(from node.Node, nodes []node.Node, content string, stores map[int]*msgstore.Store) tea.Cmd {
+func broadcastCmd(from node.Node, nodes []node.Node, content string, stores map[int]*msgstore.Store, pool *connPool) tea.Cmd {
 	return func() tea.Msg {
 		id := uuid.New().String()
 		now := time.Now().UTC().Format(time.RFC3339)
 		var errs []string
 		for _, n := range nodes {
-			c, err := wsclient.Connect(n.Host, n.Port)
+			c, err := pool.get(n)
 			if err != nil {
 				errs = append(errs, fmt.Sprintf("%s: %v", n.Name, err))
 				continue
@@ -188,7 +215,6 @@ func broadcastCmd(from node.Node, nodes []node.Node, content string, stores map[
 					s.Save(m, msgstore.Received) //nolint:errcheck
 				}
 			}
-			c.Close()
 		}
 		if len(errs) > 0 {
 			return sendResultMsg{err: fmt.Errorf("%s", strings.Join(errs, "; "))}
@@ -271,7 +297,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.action = actionViewLogs
 				if m.hostNode != nil {
 					entries, _ := m.stores[m.hostNode.ID].Latest(50)
-					m.result = formatEntries(m.hostNode.Name, entries, true)
+					m.result = formatEntries(m.hostNode.Name, entries, false)
 					m.resultErr = false
 					m.state = stateResult
 				} else {
@@ -348,9 +374,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.inputErr = ""
 			if m.action == actionSend {
-				return m, sendMsgCmd(m.fromNode, m.toNode, m.inputMsg, m.stores)
+				return m, sendMsgCmd(m.fromNode, m.toNode, m.inputMsg, m.stores, m.pool)
 			}
-			return m, broadcastCmd(m.fromNode, m.nodes, m.inputMsg, m.stores)
+			return m, broadcastCmd(m.fromNode, m.nodes, m.inputMsg, m.stores, m.pool)
 		case "backspace":
 			if len(m.inputMsg) > 0 {
 				runes := []rune(m.inputMsg)
