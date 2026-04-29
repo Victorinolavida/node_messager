@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 
+	"go.uber.org/zap"
 	"node_messager/internal/adapters/cli"
 	"node_messager/internal/config"
 	logger "node_messager/pkg/logger"
@@ -62,6 +63,7 @@ func main() {
 		}
 	}
 
+	nodeLogs := make(map[int]*zap.SugaredLogger, len(serveNodes))
 	var wg sync.WaitGroup
 	for _, n := range serveNodes {
 		n := n
@@ -72,6 +74,7 @@ func main() {
 		}
 
 		nodeLog := logger.NewLoggerToWriter(f, debugMode)
+		nodeLogs[n.ID] = nodeLog
 		nodeCtx := logger.SetContextLogger(context.Background(), nodeLog)
 
 		wg.Add(1)
@@ -85,7 +88,7 @@ func main() {
 	}
 	wg.Wait()
 
-	if err := cli.Run(cfg.Nodes, stores, cfg.HostNode, startupLog); err != nil {
+	if err := cli.Run(cfg.Nodes, stores, cfg.HostNode, startupLog, nodeLogs); err != nil {
 		startupLog.Fatalf("cli error: %v", err)
 	}
 }

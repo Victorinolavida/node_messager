@@ -91,7 +91,7 @@ func pickNode(sc *bufio.Scanner, nodes []node.Node, label string) (node.Node, bo
 	}
 }
 
-func sendMsg(pool *connPool, from, to node.Node, content string, stores map[int]*msgstore.Store) error {
+func sendMsg(pool *connPool, from, to node.Node, content string, stores map[int]*msgstore.Store, log *zap.SugaredLogger) error {
 	c, err := pool.get(to)
 	if err != nil {
 		return err
@@ -114,11 +114,12 @@ func sendMsg(pool *connPool, from, to node.Node, content string, stores map[int]
 	if s, ok := stores[from.ID]; ok {
 		_ = s.Save(m, msgstore.Sent)
 	}
+	log.Infof("[%s] sent  type=%s to=%s id=%s — %q", from.Name, m.Type, to.Name, m.ID, content)
 	// do NOT save Received here — the hub on the receiving node owns that write
 	return nil
 }
 
-func broadcast(pool *connPool, from node.Node, nodes []node.Node, content string, stores map[int]*msgstore.Store) []string {
+func broadcast(pool *connPool, from node.Node, nodes []node.Node, content string, stores map[int]*msgstore.Store, log *zap.SugaredLogger) []string {
 	id := uuid.New().String()
 	now := time.Now().UTC().Format(time.RFC3339)
 	var errs []string
@@ -144,6 +145,7 @@ func broadcast(pool *connPool, from node.Node, nodes []node.Node, content string
 		if s, ok := stores[from.ID]; ok {
 			_ = s.Save(m, msgstore.Sent)
 		}
+		log.Infof("[%s] sent  type=%s to=%s id=%s — %q", from.Name, m.Type, n.Name, id, content)
 		// do NOT save Received here — the hub on the receiving node owns that write
 	}
 	return errs
@@ -198,9 +200,17 @@ func printEntries(nodeName string, entries []msgstore.Entry) {
 	fmt.Println(formatEntries(nodeName, entries))
 }
 
+// nodeLog returns the file-backed logger for nodeID when available, else fallback.
+func nodeLog(nodeLogs map[int]*zap.SugaredLogger, nodeID int, fallback *zap.SugaredLogger) *zap.SugaredLogger {
+	if l, ok := nodeLogs[nodeID]; ok {
+		return l
+	}
+	return fallback
+}
+
 // ── main loop ─────────────────────────────────────────────────────────────────
 
-func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node, log *zap.SugaredLogger) error {
+func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node, log *zap.SugaredLogger, nodeLogs map[int]*zap.SugaredLogger) error {
 	pool := newConnPool(log)
 	defer pool.closeAll()
 
@@ -252,7 +262,7 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 				continue
 			}
 			separator()
-			if err := sendMsg(pool, from, to, content, stores); err != nil {
+			if err := sendMsg(pool, from, to, content, stores, nodeLog(nodeLogs, from.ID, log)); err != nil {
 				fmt.Printf("  error: %v\n", err)
 			} else {
 				fmt.Println("  ✓ sent")
@@ -285,7 +295,7 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 					targets = append(targets, n)
 				}
 			}
-			if errs := broadcast(pool, from, targets, content, stores); len(errs) > 0 {
+			if errs := broadcast(pool, from, targets, content, stores, nodeLog(nodeLogs, from.ID, log)); len(errs) > 0 {
 				for _, e := range errs {
 					fmt.Printf("  error: %s\n", e)
 				}

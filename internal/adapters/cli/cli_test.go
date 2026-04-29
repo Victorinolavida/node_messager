@@ -77,7 +77,7 @@ func TestSendMsg_SavesSentEntryInSenderStore(t *testing.T) {
 		receiverNode.ID: receiverStore,
 	}
 
-	if err := sendMsg(pool, senderNode, receiverNode, "hello nodeB", stores); err != nil {
+	if err := sendMsg(pool, senderNode, receiverNode, "hello nodeB", stores, testLog(t)); err != nil {
 		t.Fatalf("sendMsg: %v", err)
 	}
 
@@ -107,7 +107,7 @@ func TestSendMsg_SavesReceivedEntryInReceiverStore(t *testing.T) {
 		receiverNode.ID: receiverStore,
 	}
 
-	if err := sendMsg(pool, senderNode, receiverNode, "msg from A to B", stores); err != nil {
+	if err := sendMsg(pool, senderNode, receiverNode, "msg from A to B", stores, testLog(t)); err != nil {
 		t.Fatalf("sendMsg: %v", err)
 	}
 
@@ -135,7 +135,7 @@ func TestSendMsg_SenderStoreHasOnlyOneSentEntry(t *testing.T) {
 		receiverNode.ID: receiverStore,
 	}
 
-	if err := sendMsg(pool, senderNode, receiverNode, "once", stores); err != nil {
+	if err := sendMsg(pool, senderNode, receiverNode, "once", stores, testLog(t)); err != nil {
 		t.Fatalf("sendMsg: %v", err)
 	}
 
@@ -164,7 +164,7 @@ func TestBroadcast_SavesSentEntryPerTargetInSenderStore(t *testing.T) {
 	}
 
 	targets := []node.Node{node1, node2}
-	if errs := broadcast(pool, senderNode, targets, "broadcast!", stores); len(errs) > 0 {
+	if errs := broadcast(pool, senderNode, targets, "broadcast!", stores, testLog(t)); len(errs) > 0 {
 		t.Fatalf("broadcast errors: %v", errs)
 	}
 
@@ -197,7 +197,7 @@ func TestBroadcast_SavesReceivedEntryInEachReceiverStore(t *testing.T) {
 	}
 
 	targets := []node.Node{node1, node2}
-	if errs := broadcast(pool, senderNode, targets, "hello all", stores); len(errs) > 0 {
+	if errs := broadcast(pool, senderNode, targets, "hello all", stores, testLog(t)); len(errs) > 0 {
 		t.Fatalf("broadcast errors: %v", errs)
 	}
 
@@ -234,7 +234,7 @@ func TestBroadcast_SenderStoreHasNoReceivedEntries(t *testing.T) {
 	}
 
 	targets := []node.Node{node1, node2}
-	if errs := broadcast(pool, senderNode, targets, "no echo", stores); len(errs) > 0 {
+	if errs := broadcast(pool, senderNode, targets, "no echo", stores, testLog(t)); len(errs) > 0 {
 		t.Fatalf("broadcast errors: %v", errs)
 	}
 
