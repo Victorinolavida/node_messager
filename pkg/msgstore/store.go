@@ -48,7 +48,7 @@ func loadFromFile(path string, max int) []Entry {
 	if err != nil {
 		return make([]Entry, 0, max)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	var entries []Entry
 	scanner := bufio.NewScanner(f)
