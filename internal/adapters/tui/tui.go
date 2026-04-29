@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -73,6 +75,7 @@ const (
 	stateSelectFrom
 	stateSelectTo
 	stateInputMsg
+	stateSelectMsgNode
 	stateSelectLogNode
 	stateResult
 )
@@ -83,6 +86,7 @@ const (
 	actionSend menuAction = iota
 	actionBroadcast
 	actionListNodes
+	actionViewMessages
 	actionViewLogs
 )
 
@@ -143,7 +147,7 @@ type model struct {
 func initialModel(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node) model {
 	poolLog := logger.NewLoggerToWriter(buf, false)
 	return model{
-		choices:   []string{"Send a message", "Broadcast a message", "View node logs", "List all nodes", "Quit"},
+		choices:   []string{"Send a message", "Broadcast a message", "Messages per node", "Logs per node", "List all nodes", "Quit"},
 		state:     stateMenu,
 		logBuffer: buf,
 		nodes:     nodes,
@@ -194,9 +198,7 @@ func sendMsgCmd(from, to node.Node, content string, stores map[int]*msgstore.Sto
 		if s, ok := stores[from.ID]; ok {
 			s.Save(m, msgstore.Sent) //nolint:errcheck
 		}
-		if s, ok := stores[to.ID]; ok {
-			s.Save(m, msgstore.Received) //nolint:errcheck
-		}
+		// hub on receiving node owns the Received write
 		return sendResultMsg{}
 	}
 }
@@ -227,9 +229,7 @@ func broadcastCmd(from node.Node, nodes []node.Node, content string, stores map[
 				if s, ok := stores[from.ID]; ok {
 					s.Save(m, msgstore.Sent) //nolint:errcheck
 				}
-				if s, ok := stores[n.ID]; ok {
-					s.Save(m, msgstore.Received) //nolint:errcheck
-				}
+				// hub on receiving node owns the Received write
 			}
 		}
 		if len(errs) > 0 {
@@ -310,16 +310,25 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.state = stateSelectFrom
 				}
 			case 2:
-				m.action = actionViewLogs
+				m.action = actionViewMessages
 				if m.hostNode != nil {
 					entries, _ := m.stores[m.hostNode.ID].Latest(50)
-					m.result = formatEntries(m.hostNode.Name, entries, false)
+					m.result = formatEntries(m.hostNode.Name, entries)
+					m.resultErr = false
+					m.state = stateResult
+				} else {
+					m.state = stateSelectMsgNode
+				}
+			case 3:
+				m.action = actionViewLogs
+				if m.hostNode != nil {
+					m.result = readLogFile(m.hostNode.Name, 50)
 					m.resultErr = false
 					m.state = stateResult
 				} else {
 					m.state = stateSelectLogNode
 				}
-			case 3:
+			case 4:
 				m.action = actionListNodes
 				lines := make([]string, len(m.nodes))
 				for i, n := range m.nodes {
@@ -328,7 +337,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.result = strings.Join(lines, "\n")
 				m.resultErr = false
 				m.state = stateResult
-			case 4:
+			case 5:
 				return m, tea.Quit
 			}
 		}
@@ -406,7 +415,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case stateSelectLogNode:
+	case stateSelectMsgNode:
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			m.cursor = 0
@@ -422,7 +431,28 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			n := m.nodes[m.cursor]
 			entries, _ := m.stores[n.ID].Latest(50)
-			m.result = formatEntries(n.Name, entries, false)
+			m.result = formatEntries(n.Name, entries)
+			m.resultErr = false
+			m.cursor = 0
+			m.state = stateResult
+		}
+
+	case stateSelectLogNode:
+		switch msg.String() {
+		case "ctrl+c", "esc":
+			m.cursor = 0
+			m.state = stateMenu
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(m.nodes)-1 {
+				m.cursor++
+			}
+		case "enter":
+			n := m.nodes[m.cursor]
+			m.result = readLogFile(n.Name, 50)
 			m.resultErr = false
 			m.cursor = 0
 			m.state = stateResult
@@ -440,12 +470,30 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func formatEntries(nodeName string, entries []msgstore.Entry, sentOnly bool) string {
+func readLogFile(nodeName string, n int) string {
+	path := fmt.Sprintf("logs/%s.log", nodeName)
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Sprintf("cannot open log file %s: %v", path, err)
+	}
+	defer f.Close()
+	var lines []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	if len(lines) == 0 {
+		return fmt.Sprintf("no logs for %s yet", nodeName)
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatEntries(nodeName string, entries []msgstore.Entry) string {
 	var sb strings.Builder
 	for _, e := range entries {
-		if sentOnly && e.Type != msgstore.Sent {
-			continue
-		}
 		fmt.Fprintf(&sb, "%s  %-10s  %-10s  from=%-8s  to=%-8s  %q\n",
 			e.At.Format(time.RFC3339),
 			e.Type,
@@ -501,8 +549,12 @@ func (m model) renderLeft() string {
 		sb.WriteString(titleStyle.Render("Select FROM node") + "\n")
 		renderNodeList(&sb, m.nodes, m.cursor)
 
+	case stateSelectMsgNode:
+		sb.WriteString(titleStyle.Render("Messages for node") + "\n")
+		renderNodeList(&sb, m.nodes, m.cursor)
+
 	case stateSelectLogNode:
-		sb.WriteString(titleStyle.Render("View logs for node") + "\n")
+		sb.WriteString(titleStyle.Render("Logs for node") + "\n")
 		renderNodeList(&sb, m.nodes, m.cursor)
 
 	case stateSelectTo:
