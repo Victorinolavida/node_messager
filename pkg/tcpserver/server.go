@@ -1,51 +1,49 @@
-package hub
+package tcpserver
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
-	"net/http"
+	"fmt"
+	"net"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 	"node_messager/pkg/dto"
+	"node_messager/pkg/logger"
 	"node_messager/pkg/msgstore"
+	"node_messager/pkg/node"
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
-}
-
-type Client struct {
-	hub  *Hub
-	conn *websocket.Conn
+type client struct {
+	hub  *hub
+	conn net.Conn
 	send chan []byte
 }
 
-type Hub struct {
+type hub struct {
 	name       string
-	clients    map[*Client]bool
+	clients    map[*client]bool
 	broadcast  chan []byte
-	register   chan *Client
-	unregister chan *Client
+	register   chan *client
+	unregister chan *client
 	log        *zap.SugaredLogger
 	store      *msgstore.Store
 }
 
-func New(name string, log *zap.SugaredLogger, store *msgstore.Store) *Hub {
-	return &Hub{
+func newHub(name string, log *zap.SugaredLogger, store *msgstore.Store) *hub {
+	return &hub{
 		name:       name,
-		clients:    make(map[*Client]bool),
+		clients:    make(map[*client]bool),
 		broadcast:  make(chan []byte, 256),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		register:   make(chan *client),
+		unregister: make(chan *client),
 		log:        log,
 		store:      store,
 	}
 }
 
-func (h *Hub) Run() {
+func (h *hub) run() {
 	for {
 		select {
 		case c := <-h.register:
@@ -83,36 +81,24 @@ func (h *Hub) Run() {
 	}
 }
 
-func (h *Hub) ServeWs(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		h.log.Errorf("[%s] ws upgrade failed: %v", h.name, err)
-		return
-	}
-	c := &Client{hub: h, conn: conn, send: make(chan []byte, 256)}
-	h.register <- c
-	go c.writePump()
-	go c.readPump()
-}
-
-func (c *Client) readPump() {
+func (c *client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
 		c.conn.Close()
 	}()
-	for {
-		_, data, err := c.conn.ReadMessage()
-		if err != nil {
-			break
-		}
-		c.hub.broadcast <- data
+	scanner := bufio.NewScanner(c.conn)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		cp := make([]byte, len(line))
+		copy(cp, line)
+		c.hub.broadcast <- cp
 	}
 }
 
-func (c *Client) writePump() {
+func (c *client) writePump() {
 	defer c.conn.Close()
 	for data := range c.send {
-		if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		if _, err := fmt.Fprintf(c.conn, "%s\n", data); err != nil {
 			break
 		}
 		var msg dto.Message
@@ -120,5 +106,37 @@ func (c *Client) writePump() {
 			c.hub.log.Debugf("[%s] ack   id=%s at=%s",
 				c.hub.name, msg.ID, time.Now().UTC().Format(time.RFC3339))
 		}
+	}
+}
+
+type Server struct {
+	node  node.Node
+	store *msgstore.Store
+}
+
+func New(n node.Node, store *msgstore.Store) *Server {
+	return &Server{node: n, store: store}
+}
+
+func (s *Server) Start(ctx context.Context) error {
+	l := logger.GetContextLogger(ctx)
+	displayAddr := fmt.Sprintf("%s:%d", s.node.Host, s.node.Port)
+	bindAddr := fmt.Sprintf(":%d", s.node.Port)
+	ln, err := net.Listen("tcp", bindAddr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", bindAddr, err)
+	}
+	h := newHub(s.node.Name, l, s.store)
+	go h.run()
+	l.Infof("[%s] listening on %s", s.node.Name, displayAddr)
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return fmt.Errorf("accept: %w", err)
+		}
+		c := &client{hub: h, conn: conn, send: make(chan []byte, 256)}
+		h.register <- c
+		go c.writePump()
+		go c.readPump()
 	}
 }

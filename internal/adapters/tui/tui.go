@@ -13,7 +13,7 @@ import (
 	"node_messager/pkg/logbuffer"
 	"node_messager/pkg/msgstore"
 	"node_messager/pkg/node"
-	"node_messager/pkg/wsclient"
+	"node_messager/pkg/tcpclient"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -23,20 +23,20 @@ import (
 
 type connPool struct {
 	mu    sync.Mutex
-	conns map[int]*wsclient.Client
+	conns map[int]*tcpclient.Client
 }
 
 func newConnPool() *connPool {
-	return &connPool{conns: make(map[int]*wsclient.Client)}
+	return &connPool{conns: make(map[int]*tcpclient.Client)}
 }
 
-func (p *connPool) get(n node.Node) (*wsclient.Client, error) {
+func (p *connPool) get(n node.Node) (*tcpclient.Client, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if c, ok := p.conns[n.ID]; ok && !c.IsClosed() {
 		return c, nil
 	}
-	c, err := wsclient.Connect(n.Host, n.Port)
+	c, err := tcpclient.Connect(n.Host, n.Port)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +307,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.action = actionListNodes
 				lines := make([]string, len(m.nodes))
 				for i, n := range m.nodes {
-					lines[i] = fmt.Sprintf("  %-8s  %s:%d  (ws://%s:%d/ws)", n.Name, n.Host, n.Port, n.Host, n.Port)
+					lines[i] = fmt.Sprintf("  %-8s  %s:%d", n.Name, n.Host, n.Port)
 				}
 				m.result = strings.Join(lines, "\n")
 				m.resultErr = false
