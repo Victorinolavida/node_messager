@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"node_messager/internal/entities"
 	"node_messager/pkg/dto"
 	"go.uber.org/zap"
 	"node_messager/pkg/logbuffer"
@@ -38,7 +37,9 @@ func (p *connPool) closeAll() {
 	defer p.mu.Unlock()
 	for id, c := range p.conns {
 		p.log.Infof("[pool] closing connection node_id=%d", id)
-		c.Close()
+		if err := c.Close(); err != nil {
+			p.log.Debugf("[pool] close error node_id=%d: %v", id, err)
+		}
 		delete(p.conns, id)
 	}
 }
@@ -177,7 +178,7 @@ func sendMsgCmd(from, to node.Node, content string, stores map[int]*msgstore.Sto
 		}
 		m := dto.Message{
 			ID:       uuid.New().String(),
-			Type:     string(entities.MSG),
+			Type:     dto.TypeMsg,
 			FromNode: from.Name,
 			ToNode:   to.Name,
 			Content:  content,
@@ -213,7 +214,7 @@ func broadcastCmd(from node.Node, nodes []node.Node, content string, stores map[
 			}
 			m := dto.Message{
 				ID:       id,
-				Type:     string(entities.BROADCAST),
+				Type:     dto.TypeBroadcast,
 				FromNode: from.Name,
 				ToNode:   n.Name,
 				Content:  content,

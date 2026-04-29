@@ -34,7 +34,9 @@ func (s *tcpServer) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		ln.Close()
+		if err := ln.Close(); err != nil {
+			l.Debugf("[%s] listener close error: %v", s.node.Name, err)
+		}
 	}()
 
 	for {

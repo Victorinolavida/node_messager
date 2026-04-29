@@ -21,7 +21,7 @@ func newTestHub(t *testing.T) (*Hub, *msgstore.Store, string, string) {
 		t.Fatal(err)
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 
 	store, err := msgstore.NewWithFile(100, path)
 	if err != nil {
@@ -36,7 +36,7 @@ func newTestHub(t *testing.T) (*Hub, *msgstore.Store, string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 
 	go func() {
 		for {
@@ -91,7 +91,7 @@ func readEntries(t *testing.T, path string) []msgstore.Entry {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	var entries []msgstore.Entry
 	scanner := bufio.NewScanner(f)
@@ -113,7 +113,7 @@ func TestHub_BroadcastMessageSavedToFile(t *testing.T) {
 	_, _, path, addr := newTestHub(t)
 
 	conn := connectTCP(t, addr)
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	m := dto.Message{
 		ID:       "bc-1",
@@ -137,7 +137,7 @@ func TestHub_DirectMessageSavedToFile(t *testing.T) {
 	_, _, path, addr := newTestHub(t)
 
 	conn := connectTCP(t, addr)
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	m := dto.Message{
 		ID:       "dm-1",
@@ -159,7 +159,7 @@ func TestHub_DirectMessageSavedToFile(t *testing.T) {
 
 func recvJSON(t *testing.T, conn net.Conn, timeout time.Duration) dto.Message {
 	t.Helper()
-	conn.SetReadDeadline(time.Now().Add(timeout))
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	scanner := bufio.NewScanner(conn)
 	if !scanner.Scan() {
 		t.Fatalf("no message received: %v", scanner.Err())
@@ -175,7 +175,7 @@ func TestHub_SenderReceivesEcho(t *testing.T) {
 	_, _, _, addr := newTestHub(t)
 
 	sender := connectTCP(t, addr)
-	defer sender.Close()
+	defer sender.Close() //nolint:errcheck
 
 	m := dto.Message{
 		ID:       "echo-1",
@@ -199,9 +199,9 @@ func TestHub_MessageDeliveredToOtherClient(t *testing.T) {
 	_, _, _, addr := newTestHub(t)
 
 	sender := connectTCP(t, addr)
-	defer sender.Close()
+	defer sender.Close() //nolint:errcheck
 	receiver := connectTCP(t, addr)
-	defer receiver.Close()
+	defer receiver.Close() //nolint:errcheck
 
 	// Give hub time to register both clients.
 	time.Sleep(20 * time.Millisecond)
@@ -228,7 +228,7 @@ func TestHub_MultipleMixedMessagesSavedToFile(t *testing.T) {
 	_, _, path, addr := newTestHub(t)
 
 	conn := connectTCP(t, addr)
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	messages := []dto.Message{
 		{ID: "1", Type: "broadcast", FromNode: "nodeA", Content: "hi all"},

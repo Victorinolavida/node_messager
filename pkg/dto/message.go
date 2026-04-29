@@ -1,5 +1,10 @@
 package dto
 
+const (
+	TypeMsg       = "MSG"
+	TypeBroadcast = "BROADCAST"
+)
+
 type Message struct {
 	ID       string `json:"id"`
 	Type     string `json:"type"`

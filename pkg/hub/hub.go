@@ -88,7 +88,9 @@ func (h *Hub) Serve(conn net.Conn) {
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
-		c.conn.Close()
+		if err := c.conn.Close(); err != nil {
+			c.hub.log.Debugf("[%s] close error: %v", c.hub.name, err)
+		}
 	}()
 	scanner := bufio.NewScanner(c.conn)
 	for scanner.Scan() {
@@ -100,7 +102,11 @@ func (c *Client) readPump() {
 }
 
 func (c *Client) writePump() {
-	defer c.conn.Close()
+	defer func() {
+		if err := c.conn.Close(); err != nil {
+			c.hub.log.Debugf("[%s] close error: %v", c.hub.name, err)
+		}
+	}()
 	for data := range c.send {
 		if _, err := fmt.Fprintf(c.conn, "%s\n", data); err != nil {
 			c.hub.log.Debugf("[%s] write error, closing connection: %v", c.hub.name, err)

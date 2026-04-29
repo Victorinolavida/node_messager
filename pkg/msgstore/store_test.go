@@ -20,7 +20,7 @@ func TestSave_WritesReceivedEntryToFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 
 	store, err := NewWithFile(100, path)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestSave_WritesSentEntryToFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 
 	store, err := NewWithFile(100, path)
 	if err != nil {
@@ -80,7 +80,7 @@ func TestSave_MultipleMessagesAllWrittenToFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 
 	store, err := NewWithFile(100, path)
 	if err != nil {
@@ -165,7 +165,7 @@ func TestLatest_SaveToFile_ThenLatest_ReturnsEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := f.Name()
-	f.Close()
+	_ = f.Close()
 
 	store, err := NewWithFile(100, path)
 	if err != nil {
@@ -335,7 +335,7 @@ func readFileEntries(t *testing.T, path string) []Entry {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	var entries []Entry
 	scanner := bufio.NewScanner(f)
