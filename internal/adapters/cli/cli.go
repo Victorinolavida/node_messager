@@ -59,6 +59,10 @@ func (p *connPool) get(n node.Node) (*tcpclient.Client, error) {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+func separator() {
+	fmt.Println()
+}
+
 func prompt(sc *bufio.Scanner, label string) string {
 	fmt.Print(label)
 	if !sc.Scan() {
@@ -72,10 +76,11 @@ func pickNode(sc *bufio.Scanner, nodes []node.Node, label string) (node.Node, bo
 	for i, n := range nodes {
 		fmt.Printf("  %d) %-8s  %s:%d\n", i+1, n.Name, n.Host, n.Port)
 	}
+	fmt.Println()
 	for {
 		raw := prompt(sc, "choice> ")
 		if raw == "" {
-			return node.Node{}, false // EOF or cancel
+			return node.Node{}, false
 		}
 		for i, n := range nodes {
 			if raw == fmt.Sprintf("%d", i+1) || strings.EqualFold(raw, n.Name) {
@@ -171,13 +176,13 @@ func tailLogFile(nodeName string, n int) {
 	}
 }
 
-func printEntries(nodeName string, entries []msgstore.Entry) {
+func formatEntries(nodeName string, entries []msgstore.Entry) string {
 	if len(entries) == 0 {
-		fmt.Printf("no messages for %s yet\n", nodeName)
-		return
+		return fmt.Sprintf("No messages for %s yet.", nodeName)
 	}
+	var sb strings.Builder
 	for _, e := range entries {
-		fmt.Printf("%s  %-10s  %-10s  from=%-8s  to=%-8s  %q\n",
+		fmt.Fprintf(&sb, "%s  %-10s  %-10s  from=%-8s  to=%-8s  %q\n",
 			e.At.Format(time.RFC3339),
 			e.Type,
 			e.Msg.Type,
@@ -186,6 +191,11 @@ func printEntries(nodeName string, entries []msgstore.Entry) {
 			e.Msg.Content,
 		)
 	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func printEntries(nodeName string, entries []msgstore.Entry) {
+	fmt.Println(formatEntries(nodeName, entries))
 }
 
 // ── main loop ─────────────────────────────────────────────────────────────────
@@ -197,24 +207,31 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 	sc := bufio.NewScanner(os.Stdin)
 
 	for {
+		separator()
+		fmt.Println("  node messager")
 		fmt.Println()
-		fmt.Println("1) send message")
-		fmt.Println("2) broadcast")
-		fmt.Println("3) messages per node")
-		fmt.Println("4) logs per node")
-		fmt.Println("5) list nodes")
-		fmt.Println("6) quit")
+		fmt.Println("  1) send message")
+		fmt.Println("  2) broadcast")
+		fmt.Println("  3) messages per node")
+		fmt.Println("  4) logs per node")
+		fmt.Println("  5) list nodes")
+		fmt.Println("  6) quit")
+		separator()
 
 		choice := prompt(sc, "> ")
 		switch choice {
 
 		case "1", "send":
+			separator()
+			fmt.Println("  send message")
+			separator()
 			var from node.Node
 			var ok bool
 			if hostNode != nil {
 				from = *hostNode
+				fmt.Printf("  from: %s\n\n", from.Name)
 			} else {
-				if from, ok = pickNode(sc, nodes, "from node:"); !ok {
+				if from, ok = pickNode(sc, nodes, "  from node:"); !ok {
 					continue
 				}
 			}
@@ -224,60 +241,98 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 					targets = append(targets, n)
 				}
 			}
-			to, ok := pickNode(sc, targets, "to node:")
+			to, ok := pickNode(sc, targets, "  to node:")
 			if !ok {
 				continue
 			}
-			content := prompt(sc, "message: ")
+			fmt.Printf("\n  %s → %s\n", from.Name, to.Name)
+			content := prompt(sc, "  message: ")
 			if content == "" {
-				fmt.Println("message cannot be empty")
+				fmt.Println("\n  error: message cannot be empty")
 				continue
 			}
+			separator()
 			if err := sendMsg(pool, from, to, content, stores); err != nil {
-				fmt.Printf("error: %v\n", err)
+				fmt.Printf("  error: %v\n", err)
 			} else {
-				fmt.Println("sent")
+				fmt.Println("  ✓ sent")
 			}
 
 		case "2", "broadcast":
+			separator()
+			fmt.Println("  broadcast")
+			separator()
 			var from node.Node
 			var ok bool
 			if hostNode != nil {
 				from = *hostNode
+				fmt.Printf("  from: %s → all nodes\n\n", from.Name)
 			} else {
-				if from, ok = pickNode(sc, nodes, "from node:"); !ok {
+				if from, ok = pickNode(sc, nodes, "  from node:"); !ok {
 					continue
 				}
+				fmt.Printf("\n  %s → all nodes\n", from.Name)
 			}
-			content := prompt(sc, "message: ")
+			content := prompt(sc, "  message: ")
 			if content == "" {
-				fmt.Println("message cannot be empty")
+				fmt.Println("\n  error: message cannot be empty")
 				continue
 			}
-			if errs := broadcast(pool, from, nodes, content, stores); len(errs) > 0 {
+			separator()
+			targets := make([]node.Node, 0, len(nodes)-1)
+			for _, n := range nodes {
+				if n.ID != from.ID {
+					targets = append(targets, n)
+				}
+			}
+			if errs := broadcast(pool, from, targets, content, stores); len(errs) > 0 {
 				for _, e := range errs {
-					fmt.Printf("error: %s\n", e)
+					fmt.Printf("  error: %s\n", e)
 				}
 			} else {
-				fmt.Println("broadcast sent")
+				fmt.Println("  ✓ broadcast sent")
 			}
 
 		case "3", "messages":
-			n, ok := pickNode(sc, nodes, "messages for node:")
-			if !ok {
-				continue
+			separator()
+			fmt.Println("  messages per node")
+			separator()
+			if hostNode != nil {
+				fmt.Printf("  messages — %s\n\n", hostNode.Name)
+				entries, _ := stores[hostNode.ID].Latest(50)
+				printEntries(hostNode.Name, entries)
+			} else {
+				n, ok := pickNode(sc, nodes, "  select node:")
+				if !ok {
+					continue
+				}
+				separator()
+				fmt.Printf("  messages — %s\n\n", n.Name)
+				entries, _ := stores[n.ID].Latest(50)
+				printEntries(n.Name, entries)
 			}
-			entries, _ := stores[n.ID].Latest(50)
-			printEntries(n.Name, entries)
 
 		case "4", "logs":
-			n, ok := pickNode(sc, nodes, "logs for node:")
-			if !ok {
-				continue
+			separator()
+			fmt.Println("  logs per node")
+			separator()
+			if hostNode != nil {
+				fmt.Printf("  logs — %s\n\n", hostNode.Name)
+				tailLogFile(hostNode.Name, logLines)
+			} else {
+				n, ok := pickNode(sc, nodes, "  select node:")
+				if !ok {
+					continue
+				}
+				separator()
+				fmt.Printf("  logs — %s\n\n", n.Name)
+				tailLogFile(n.Name, logLines)
 			}
-			tailLogFile(n.Name, logLines)
 
 		case "5", "list":
+			separator()
+			fmt.Println("  nodes")
+			separator()
 			for _, n := range nodes {
 				fmt.Printf("  %-8s  %s:%d\n", n.Name, n.Host, n.Port)
 			}
@@ -286,7 +341,7 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 			return nil
 
 		default:
-			fmt.Println("unknown command")
+			fmt.Println("  unknown command")
 		}
 	}
 }
