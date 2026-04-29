@@ -194,9 +194,7 @@ func sendMsgCmd(from, to node.Node, content string, stores map[int]*msgstore.Sto
 		if s, ok := stores[from.ID]; ok {
 			s.Save(m, msgstore.Sent) //nolint:errcheck
 		}
-		if s, ok := stores[to.ID]; ok {
-			s.Save(m, msgstore.Received) //nolint:errcheck
-		}
+		// hub on receiving node owns the Received write
 		return sendResultMsg{}
 	}
 }
@@ -227,9 +225,7 @@ func broadcastCmd(from node.Node, nodes []node.Node, content string, stores map[
 				if s, ok := stores[from.ID]; ok {
 					s.Save(m, msgstore.Sent) //nolint:errcheck
 				}
-				if s, ok := stores[n.ID]; ok {
-					s.Save(m, msgstore.Received) //nolint:errcheck
-				}
+				// hub on receiving node owns the Received write
 			}
 		}
 		if len(errs) > 0 {
