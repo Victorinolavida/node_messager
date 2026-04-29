@@ -17,6 +17,9 @@ import (
 	"node_messager/pkg/tcpclient"
 )
 
+const logDir = "logs"
+const logLines = 50
+
 // ── connection pool ───────────────────────────────────────────────────────────
 
 type connPool struct {
@@ -141,6 +144,33 @@ func broadcast(pool *connPool, from node.Node, nodes []node.Node, content string
 	return errs
 }
 
+func tailLogFile(nodeName string, n int) {
+	path := fmt.Sprintf("%s/%s.log", logDir, nodeName)
+	f, err := os.Open(path)
+	if err != nil {
+		fmt.Printf("cannot open log file %s: %v\n", path, err)
+		return
+	}
+	defer f.Close()
+
+	// collect all lines, keep last n
+	var lines []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	if len(lines) == 0 {
+		fmt.Printf("no logs for %s yet\n", nodeName)
+		return
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	for _, l := range lines {
+		fmt.Println(l)
+	}
+}
+
 func printEntries(nodeName string, entries []msgstore.Entry) {
 	if len(entries) == 0 {
 		fmt.Printf("no messages for %s yet\n", nodeName)
@@ -171,8 +201,9 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 		fmt.Println("1) send message")
 		fmt.Println("2) broadcast")
 		fmt.Println("3) messages per node")
-		fmt.Println("4) list nodes")
-		fmt.Println("5) quit")
+		fmt.Println("4) logs per node")
+		fmt.Println("5) list nodes")
+		fmt.Println("6) quit")
 
 		choice := prompt(sc, "> ")
 		switch choice {
@@ -239,12 +270,19 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 			entries, _ := stores[n.ID].Latest(50)
 			printEntries(n.Name, entries)
 
-		case "4", "list":
+		case "4", "logs":
+			n, ok := pickNode(sc, nodes, "logs for node:")
+			if !ok {
+				continue
+			}
+			tailLogFile(n.Name, logLines)
+
+		case "5", "list":
 			for _, n := range nodes {
 				fmt.Printf("  %-8s  %s:%d\n", n.Name, n.Host, n.Port)
 			}
 
-		case "5", "q", "quit", "exit", "":
+		case "6", "q", "quit", "exit", "":
 			return nil
 
 		default:

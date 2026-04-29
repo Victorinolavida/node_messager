@@ -19,7 +19,7 @@ func saveMsg(t *testing.T, store *msgstore.Store, id, typ, from, to, content str
 	}
 }
 
-func TestViewLogs_BroadcastReceived_AppearsWhenNotSentOnly(t *testing.T) {
+func TestFormatEntries_ReceivedAppears(t *testing.T) {
 	store := msgstore.New(100)
 	saveMsg(t, store, "bc-1", "broadcast", "nodeA", "", "hello all", msgstore.Received)
 
@@ -28,17 +28,17 @@ func TestViewLogs_BroadcastReceived_AppearsWhenNotSentOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := formatEntries("nodeA", entries, false)
+	result := formatEntries("nodeA", entries)
 
-	if !strings.Contains(result, "bc-1") && !strings.Contains(result, "hello all") {
-		t.Errorf("broadcast message not in log output: %q", result)
+	if !strings.Contains(result, "hello all") {
+		t.Errorf("received message missing from output: %q", result)
 	}
 	if !strings.Contains(result, string(msgstore.Received)) {
 		t.Errorf("entry type %q not in output: %q", msgstore.Received, result)
 	}
 }
 
-func TestViewLogs_SentDirect_AppearsInBothViews(t *testing.T) {
+func TestFormatEntries_SentAppears(t *testing.T) {
 	store := msgstore.New(100)
 	saveMsg(t, store, "dm-1", "direct", "nodeA", "nodeB", "private", msgstore.Sent)
 
@@ -47,49 +47,13 @@ func TestViewLogs_SentDirect_AppearsInBothViews(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	allResult := formatEntries("nodeA", entries, false)
-	if !strings.Contains(allResult, "private") {
-		t.Errorf("sent direct not in all-view: %q", allResult)
-	}
-
-	sentResult := formatEntries("nodeA", entries, true)
-	if !strings.Contains(sentResult, "private") {
-		t.Errorf("sent direct not in sent-only view: %q", sentResult)
+	result := formatEntries("nodeA", entries)
+	if !strings.Contains(result, "private") {
+		t.Errorf("sent message missing from output: %q", result)
 	}
 }
 
-func TestViewLogs_ReceivedFiltered_WhenSentOnly(t *testing.T) {
-	store := msgstore.New(100)
-	saveMsg(t, store, "r-1", "broadcast", "nodeB", "", "incoming", msgstore.Received)
-	saveMsg(t, store, "s-1", "direct", "nodeA", "nodeB", "outgoing", msgstore.Sent)
-
-	entries, err := store.Latest(50)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result := formatEntries("nodeA", entries, true)
-
-	if strings.Contains(result, "incoming") {
-		t.Errorf("received message should be hidden in sent-only view: %q", result)
-	}
-	if !strings.Contains(result, "outgoing") {
-		t.Errorf("sent message should appear in sent-only view: %q", result)
-	}
-}
-
-func TestViewLogs_EmptyStore_ReturnsNoMessagesText(t *testing.T) {
-	store := msgstore.New(100)
-	entries, _ := store.Latest(50)
-
-	result := formatEntries("nodeA", entries, false)
-
-	if !strings.Contains(result, "No messages for nodeA yet.") {
-		t.Errorf("want no-messages text, got: %q", result)
-	}
-}
-
-func TestViewLogs_MixedMessages_AllPresentInOutput(t *testing.T) {
+func TestFormatEntries_MixedMessages_AllPresent(t *testing.T) {
 	store := msgstore.New(100)
 	saveMsg(t, store, "1", "broadcast", "nodeA", "", "hi all", msgstore.Received)
 	saveMsg(t, store, "2", "direct", "nodeA", "nodeB", "hey B", msgstore.Sent)
@@ -99,20 +63,27 @@ func TestViewLogs_MixedMessages_AllPresentInOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 3 {
-		t.Fatalf("want 3 entries from store, got %d", len(entries))
-	}
 
-	result := formatEntries("nodeA", entries, false)
-
+	result := formatEntries("nodeA", entries)
 	for _, content := range []string{"hi all", "hey B", "yo"} {
 		if !strings.Contains(result, content) {
-			t.Errorf("content %q missing from log view: %q", content, result)
+			t.Errorf("content %q missing from output: %q", content, result)
 		}
 	}
 }
 
-func TestViewLogs_NewNode_FileCreated_ShowsNoMessages(t *testing.T) {
+func TestFormatEntries_EmptyStore_ReturnsNoMessagesText(t *testing.T) {
+	store := msgstore.New(100)
+	entries, _ := store.Latest(50)
+
+	result := formatEntries("nodeA", entries)
+
+	if !strings.Contains(result, "No messages for nodeA yet.") {
+		t.Errorf("want no-messages text, got: %q", result)
+	}
+}
+
+func TestFormatEntries_NewNode_FileCreated_ShowsNoMessages(t *testing.T) {
 	path := fmt.Sprintf("%s/new-node.jsonl", t.TempDir())
 
 	store, err := msgstore.NewWithFile(50, path)
@@ -129,14 +100,14 @@ func TestViewLogs_NewNode_FileCreated_ShowsNoMessages(t *testing.T) {
 		t.Fatalf("Latest: %v", err)
 	}
 
-	result := formatEntries("nodeX", entries, false)
+	result := formatEntries("nodeX", entries)
 
 	if !strings.Contains(result, "No messages for nodeX yet.") {
 		t.Errorf("want no-messages text for new node, got: %q", result)
 	}
 }
 
-func TestViewLogs_HostNode_ShowsBothSentAndReceived(t *testing.T) {
+func TestFormatEntries_ShowsBothSentAndReceived(t *testing.T) {
 	path := fmt.Sprintf("%s/host-node.jsonl", t.TempDir())
 
 	store, err := msgstore.NewWithFile(50, path)
@@ -148,23 +119,22 @@ func TestViewLogs_HostNode_ShowsBothSentAndReceived(t *testing.T) {
 	saveMsg(t, store, "r-1", "broadcast", "nodeB", "", "received msg", msgstore.Received)
 
 	entries, _ := store.Latest(50)
-	// host view uses sentOnly=false — must show both
-	result := formatEntries("hostNode", entries, false)
+	result := formatEntries("hostNode", entries)
 
 	if !strings.Contains(result, "sent msg") {
-		t.Errorf("sent message missing from host log view: %q", result)
+		t.Errorf("sent message missing from output: %q", result)
 	}
 	if !strings.Contains(result, "received msg") {
-		t.Errorf("received message missing from host log view: %q", result)
+		t.Errorf("received message missing from output: %q", result)
 	}
 }
 
-func TestViewLogs_EntryTimestamp_PresentInOutput(t *testing.T) {
+func TestFormatEntries_TimestampPresent(t *testing.T) {
 	store := msgstore.New(100)
 	saveMsg(t, store, "ts-1", "direct", "nodeA", "nodeB", "timed msg", msgstore.Sent)
 
 	entries, _ := store.Latest(50)
-	result := formatEntries("nodeA", entries, false)
+	result := formatEntries("nodeA", entries)
 
 	year := time.Now().UTC().Format("2006")
 	if !strings.Contains(result, year) {
