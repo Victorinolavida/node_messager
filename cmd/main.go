@@ -6,9 +6,8 @@ import (
 	"os"
 	"sync"
 
-	"node_messager/internal/adapters/tui"
+	"node_messager/internal/adapters/cli"
 	"node_messager/internal/config"
-	"node_messager/pkg/logbuffer"
 	logger "node_messager/pkg/logger"
 	"node_messager/pkg/msgstore"
 	"node_messager/pkg/node"
@@ -34,7 +33,6 @@ func main() {
 	}
 
 	debugMode := debug == "true"
-	buf := logbuffer.New(500)
 
 	// When host is defined, only run server+store for host node.
 	// Otherwise run server+store for every node in the list.
@@ -73,7 +71,7 @@ func main() {
 			startupLog.Fatalf("[%s] open log file: %v", n.Name, err)
 		}
 
-		nodeLog := logger.NewLoggerForNode(buf, f, debugMode)
+		nodeLog := logger.NewLoggerToWriter(f, debugMode)
 		nodeCtx := logger.SetContextLogger(context.Background(), nodeLog)
 
 		wg.Add(1)
@@ -87,8 +85,7 @@ func main() {
 	}
 	wg.Wait()
 
-	_, err = tui.NewTui(buf, cfg.Nodes, stores, cfg.HostNode)
-	if err != nil {
-		startupLog.Fatalf("error initializing tui: %v", err)
+	if err := cli.Run(cfg.Nodes, stores, cfg.HostNode, startupLog); err != nil {
+		startupLog.Fatalf("cli error: %v", err)
 	}
 }

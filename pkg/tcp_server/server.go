@@ -21,16 +21,21 @@ func New(n node.Node, store *msgstore.Store) *tcpServer {
 }
 
 func (s *tcpServer) Start(ctx context.Context) error {
-	l := logger.GetContextLogger(ctx)
 	addr := fmt.Sprintf(":%d", s.node.Port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
+	return s.serve(ctx, ln)
+}
 
+// serve runs the accept loop on an already-bound listener.
+// Exported for testing: pass a pre-bound net.Listener on ":0".
+func (s *tcpServer) serve(ctx context.Context, ln net.Listener) error {
+	l := logger.GetContextLogger(ctx)
 	h := hub.New(s.node.Name, l, s.store)
 	go h.Run()
-	l.Infof("[%s] listening on %s", s.node.Name, addr)
+	l.Infof("[%s] listening on %s", s.node.Name, ln.Addr())
 
 	go func() {
 		<-ctx.Done()
