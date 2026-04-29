@@ -1,25 +1,20 @@
 package hub
 
 import (
+	"bufio"
 	"encoding/json"
-	"net/http"
+	"fmt"
+	"net"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 	"node_messager/pkg/dto"
 	"node_messager/pkg/msgstore"
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
-}
-
 type Client struct {
 	hub  *Hub
-	conn *websocket.Conn
+	conn net.Conn
 	send chan []byte
 }
 
@@ -83,12 +78,7 @@ func (h *Hub) Run() {
 	}
 }
 
-func (h *Hub) ServeWs(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		h.log.Errorf("[%s] ws upgrade failed: %v", h.name, err)
-		return
-	}
+func (h *Hub) Serve(conn net.Conn) {
 	c := &Client{hub: h, conn: conn, send: make(chan []byte, 256)}
 	h.register <- c
 	go c.writePump()
@@ -100,19 +90,20 @@ func (c *Client) readPump() {
 		c.hub.unregister <- c
 		c.conn.Close()
 	}()
-	for {
-		_, data, err := c.conn.ReadMessage()
-		if err != nil {
-			break
-		}
-		c.hub.broadcast <- data
+	scanner := bufio.NewScanner(c.conn)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		buf := make([]byte, len(line))
+		copy(buf, line)
+		c.hub.broadcast <- buf
 	}
 }
 
 func (c *Client) writePump() {
 	defer c.conn.Close()
 	for data := range c.send {
-		if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		if _, err := fmt.Fprintf(c.conn, "%s\n", data); err != nil {
+			c.hub.log.Debugf("[%s] write error, closing connection: %v", c.hub.name, err)
 			break
 		}
 		var msg dto.Message

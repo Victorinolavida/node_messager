@@ -3,20 +3,18 @@ package hub
 import (
 	"bufio"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"fmt"
+	"net"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 	"node_messager/pkg/dto"
 	"node_messager/pkg/msgstore"
 )
 
-func newTestHub(t *testing.T) (*Hub, *msgstore.Store, string) {
+func newTestHub(t *testing.T) (*Hub, *msgstore.Store, string, string) {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "hub-*.jsonl")
 	if err != nil {
@@ -33,26 +31,42 @@ func newTestHub(t *testing.T) (*Hub, *msgstore.Store, string) {
 	log, _ := zap.NewDevelopment()
 	h := New("test", log.Sugar(), store)
 	go h.Run()
-	return h, store, path
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go h.Serve(conn)
+		}
+	}()
+
+	return h, store, path, ln.Addr().String()
 }
 
-func connectWS(t *testing.T, srv *httptest.Server) *websocket.Conn {
+func connectTCP(t *testing.T, addr string) net.Conn {
 	t.Helper()
-	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	return conn
 }
 
-func sendJSON(t *testing.T, conn *websocket.Conn, m dto.Message) {
+func sendJSON(t *testing.T, conn net.Conn, m dto.Message) {
 	t.Helper()
 	data, err := json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+	if _, err := fmt.Fprintf(conn, "%s\n", data); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 }
@@ -96,11 +110,9 @@ func readEntries(t *testing.T, path string) []msgstore.Entry {
 }
 
 func TestHub_BroadcastMessageSavedToFile(t *testing.T) {
-	h, _, path := newTestHub(t)
-	srv := httptest.NewServer(http.HandlerFunc(h.ServeWs))
-	defer srv.Close()
+	_, _, path, addr := newTestHub(t)
 
-	conn := connectWS(t, srv)
+	conn := connectTCP(t, addr)
 	defer conn.Close()
 
 	m := dto.Message{
@@ -122,11 +134,9 @@ func TestHub_BroadcastMessageSavedToFile(t *testing.T) {
 }
 
 func TestHub_DirectMessageSavedToFile(t *testing.T) {
-	h, _, path := newTestHub(t)
-	srv := httptest.NewServer(http.HandlerFunc(h.ServeWs))
-	defer srv.Close()
+	_, _, path, addr := newTestHub(t)
 
-	conn := connectWS(t, srv)
+	conn := connectTCP(t, addr)
 	defer conn.Close()
 
 	m := dto.Message{
@@ -147,12 +157,77 @@ func TestHub_DirectMessageSavedToFile(t *testing.T) {
 	}
 }
 
-func TestHub_MultipleMixedMessagesSavedToFile(t *testing.T) {
-	h, _, path := newTestHub(t)
-	srv := httptest.NewServer(http.HandlerFunc(h.ServeWs))
-	defer srv.Close()
+func recvJSON(t *testing.T, conn net.Conn, timeout time.Duration) dto.Message {
+	t.Helper()
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		t.Fatalf("no message received: %v", scanner.Err())
+	}
+	var m dto.Message
+	if err := json.Unmarshal(scanner.Bytes(), &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return m
+}
 
-	conn := connectWS(t, srv)
+func TestHub_SenderReceivesEcho(t *testing.T) {
+	_, _, _, addr := newTestHub(t)
+
+	sender := connectTCP(t, addr)
+	defer sender.Close()
+
+	m := dto.Message{
+		ID:       "echo-1",
+		Type:     "direct",
+		FromNode: "nodeA",
+		ToNode:   "nodeB",
+		Content:  "ping",
+	}
+	sendJSON(t, sender, m)
+
+	got := recvJSON(t, sender, 2*time.Second)
+	if got.ID != m.ID {
+		t.Errorf("want id %q got %q", m.ID, got.ID)
+	}
+	if got.Content != m.Content {
+		t.Errorf("want content %q got %q", m.Content, got.Content)
+	}
+}
+
+func TestHub_MessageDeliveredToOtherClient(t *testing.T) {
+	_, _, _, addr := newTestHub(t)
+
+	sender := connectTCP(t, addr)
+	defer sender.Close()
+	receiver := connectTCP(t, addr)
+	defer receiver.Close()
+
+	// Give hub time to register both clients.
+	time.Sleep(20 * time.Millisecond)
+
+	m := dto.Message{
+		ID:       "deliver-1",
+		Type:     "direct",
+		FromNode: "nodeA",
+		ToNode:   "nodeB",
+		Content:  "hello nodeB",
+	}
+	sendJSON(t, sender, m)
+
+	got := recvJSON(t, receiver, 2*time.Second)
+	if got.ID != m.ID {
+		t.Errorf("want id %q got %q", m.ID, got.ID)
+	}
+	if got.Content != m.Content {
+		t.Errorf("want content %q got %q", m.Content, got.Content)
+	}
+}
+
+func TestHub_MultipleMixedMessagesSavedToFile(t *testing.T) {
+	_, _, path, addr := newTestHub(t)
+
+	conn := connectTCP(t, addr)
 	defer conn.Close()
 
 	messages := []dto.Message{

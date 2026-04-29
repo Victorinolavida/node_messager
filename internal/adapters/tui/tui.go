@@ -10,10 +10,12 @@ import (
 	"github.com/google/uuid"
 	"node_messager/internal/entities"
 	"node_messager/pkg/dto"
+	"go.uber.org/zap"
 	"node_messager/pkg/logbuffer"
+	"node_messager/pkg/logger"
 	"node_messager/pkg/msgstore"
 	"node_messager/pkg/node"
-	"node_messager/pkg/wsclient"
+	"node_messager/pkg/tcpclient"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -23,20 +25,32 @@ import (
 
 type connPool struct {
 	mu    sync.Mutex
-	conns map[int]*wsclient.Client
+	conns map[int]*tcpclient.Client
+	log   *zap.SugaredLogger
 }
 
-func newConnPool() *connPool {
-	return &connPool{conns: make(map[int]*wsclient.Client)}
+func newConnPool(log *zap.SugaredLogger) *connPool {
+	return &connPool{conns: make(map[int]*tcpclient.Client), log: log}
 }
 
-func (p *connPool) get(n node.Node) (*wsclient.Client, error) {
+func (p *connPool) closeAll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, c := range p.conns {
+		p.log.Infof("[pool] closing connection node_id=%d", id)
+		c.Close()
+		delete(p.conns, id)
+	}
+}
+
+func (p *connPool) get(n node.Node) (*tcpclient.Client, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if c, ok := p.conns[n.ID]; ok && !c.IsClosed() {
 		return c, nil
 	}
-	c, err := wsclient.Connect(n.Host, n.Port)
+	p.log.Infof("[pool] connecting to %s (%s:%d)", n.Name, n.Host, n.Port)
+	c, err := tcpclient.Connect(n.Host, n.Port)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +140,7 @@ type model struct {
 }
 
 func initialModel(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node) model {
+	poolLog := logger.NewLoggerToWriter(buf, false)
 	return model{
 		choices:   []string{"Send a message", "Broadcast a message", "View node logs", "List all nodes", "Quit"},
 		state:     stateMenu,
@@ -133,7 +148,7 @@ func initialModel(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgs
 		nodes:     nodes,
 		stores:    stores,
 		hostNode:  hostNode,
-		pool:      newConnPool(),
+		pool:      newConnPool(poolLog),
 	}
 }
 
@@ -307,7 +322,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.action = actionListNodes
 				lines := make([]string, len(m.nodes))
 				for i, n := range m.nodes {
-					lines[i] = fmt.Sprintf("  %-8s  %s:%d  (ws://%s:%d/ws)", n.Name, n.Host, n.Port, n.Host, n.Port)
+					lines[i] = fmt.Sprintf("  %-8s  %s:%d", n.Name, n.Host, n.Port)
 				}
 				m.result = strings.Join(lines, "\n")
 				m.resultErr = false
@@ -561,5 +576,9 @@ func (m model) renderLogs(height int) string {
 
 func NewTui(buf *logbuffer.Buffer, nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node) (tea.Model, error) {
 	p := tea.NewProgram(initialModel(buf, nodes, stores, hostNode), tea.WithAltScreen())
-	return p.Run()
+	result, err := p.Run()
+	if m, ok := result.(model); ok {
+		m.pool.closeAll()
+	}
+	return result, err
 }

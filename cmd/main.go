@@ -8,11 +8,11 @@ import (
 
 	"node_messager/internal/adapters/tui"
 	"node_messager/internal/config"
-	httpserver "node_messager/pkg/http_server"
 	"node_messager/pkg/logbuffer"
 	logger "node_messager/pkg/logger"
 	"node_messager/pkg/msgstore"
 	"node_messager/pkg/node"
+	tcpserver "node_messager/pkg/tcp_server"
 )
 
 // overridden at build time: go build -ldflags "-X main.debug=false" ./cmd
@@ -77,7 +77,7 @@ func main() {
 		nodeCtx := logger.SetContextLogger(context.Background(), nodeLog)
 
 		wg.Add(1)
-		srv := httpserver.NewHttpServer(n, stores[n.ID])
+		srv := tcpserver.New(n, stores[n.ID])
 		go func() {
 			wg.Done()
 			if err := srv.Start(nodeCtx); err != nil {

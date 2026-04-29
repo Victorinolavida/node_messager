@@ -1,24 +1,24 @@
-package wsclient
+package tcpclient
 
 import (
+	"bufio"
 	"fmt"
+	"net"
 	"sync"
-
-	"github.com/gorilla/websocket"
 )
 
 type Client struct {
 	mu   sync.Mutex
-	conn *websocket.Conn
+	conn net.Conn
 	Recv chan []byte
 	done chan struct{}
 }
 
 func Connect(host string, port int) (*Client, error) {
-	url := fmt.Sprintf("ws://%s:%d/ws", host, port)
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	addr := fmt.Sprintf("%s:%d", host, port)
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("connect %s: %w", url, err)
+		return nil, fmt.Errorf("connect %s: %w", addr, err)
 	}
 	c := &Client{
 		conn: conn,
@@ -41,7 +41,8 @@ func (c *Client) IsClosed() bool {
 func (c *Client) Send(msg []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.conn.WriteMessage(websocket.TextMessage, msg)
+	_, err := fmt.Fprintf(c.conn, "%s\n", msg)
+	return err
 }
 
 func (c *Client) Close() error {
@@ -51,11 +52,11 @@ func (c *Client) Close() error {
 func (c *Client) readLoop() {
 	defer close(c.Recv)
 	defer close(c.done)
-	for {
-		_, msg, err := c.conn.ReadMessage()
-		if err != nil {
-			return
-		}
-		c.Recv <- msg
+	scanner := bufio.NewScanner(c.conn)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		buf := make([]byte, len(line))
+		copy(buf, line)
+		c.Recv <- buf
 	}
 }
