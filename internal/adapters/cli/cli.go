@@ -106,9 +106,7 @@ func sendMsg(pool *connPool, from, to node.Node, content string, stores map[int]
 	if s, ok := stores[from.ID]; ok {
 		_ = s.Save(m, msgstore.Sent)
 	}
-	if s, ok := stores[to.ID]; ok {
-		_ = s.Save(m, msgstore.Received)
-	}
+	// do NOT save Received here — the hub on the receiving node owns that write
 	return nil
 }
 
@@ -138,9 +136,7 @@ func broadcast(pool *connPool, from node.Node, nodes []node.Node, content string
 		if s, ok := stores[from.ID]; ok {
 			_ = s.Save(m, msgstore.Sent)
 		}
-		if s, ok := stores[n.ID]; ok {
-			_ = s.Save(m, msgstore.Received)
-		}
+		// do NOT save Received here — the hub on the receiving node owns that write
 	}
 	return errs
 }
