@@ -2,15 +2,18 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"node_messager/internal/service"
 	"node_messager/pkg/dto"
 	"node_messager/pkg/msgstore"
 	"node_messager/pkg/node"
@@ -115,7 +118,6 @@ func sendMsg(pool *connPool, from, to node.Node, content string, stores map[int]
 		_ = s.Save(m, msgstore.Sent)
 	}
 	log.Infof("[%s] sent  type=%s to=%s id=%s — %q", from.Name, m.Type, to.Name, m.ID, content)
-	// do NOT save Received here — the hub on the receiving node owns that write
 	return nil
 }
 
@@ -146,7 +148,6 @@ func broadcast(pool *connPool, from node.Node, nodes []node.Node, content string
 			_ = s.Save(m, msgstore.Sent)
 		}
 		log.Infof("[%s] sent  type=%s to=%s id=%s — %q", from.Name, m.Type, n.Name, id, content)
-		// do NOT save Received here — the hub on the receiving node owns that write
 	}
 	return errs
 }
@@ -160,7 +161,6 @@ func tailLogFile(nodeName string, n int) {
 	}
 	defer f.Close()
 
-	// collect all lines, keep last n
 	var lines []string
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -200,7 +200,6 @@ func printEntries(nodeName string, entries []msgstore.Entry) {
 	fmt.Println(formatEntries(nodeName, entries))
 }
 
-// nodeLog returns the file-backed logger for nodeID when available, else fallback.
 func nodeLog(nodeLogs map[int]*zap.SugaredLogger, nodeID int, fallback *zap.SugaredLogger) *zap.SugaredLogger {
 	if l, ok := nodeLogs[nodeID]; ok {
 		return l
@@ -210,21 +209,35 @@ func nodeLog(nodeLogs map[int]*zap.SugaredLogger, nodeID int, fallback *zap.Suga
 
 // ── main loop ─────────────────────────────────────────────────────────────────
 
-func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node, log *zap.SugaredLogger, nodeLogs map[int]*zap.SugaredLogger) error {
+func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node, svc *service.TicketService, log *zap.SugaredLogger, nodeLogs map[int]*zap.SugaredLogger) error {
 	pool := newConnPool(log)
 	defer pool.closeAll()
 
 	sc := bufio.NewScanner(os.Stdin)
+	ctx := context.Background()
 
 	for {
 		separator()
-		fmt.Println("  node messager")
+		fmt.Println("  node messager — distributed ticket system")
 		fmt.Println()
+		fmt.Println("  ── messaging ──")
 		fmt.Println("  1) send message")
 		fmt.Println("  2) broadcast")
 		fmt.Println("  3) messages per node")
 		fmt.Println("  4) logs per node")
 		fmt.Println("  5) list nodes")
+		fmt.Println()
+		fmt.Println("  ── ticket system ──")
+		fmt.Println("  7) raise ticket")
+		fmt.Println("  8) close ticket")
+		fmt.Println("  9) list tickets")
+		fmt.Println(" 10) add user")
+		fmt.Println(" 11) add engineer")
+		fmt.Println(" 12) add device")
+		fmt.Println(" 13) list all users")
+		fmt.Println(" 14) list all engineers")
+		fmt.Println(" 15) list all devices")
+		fmt.Println()
 		fmt.Println("  6) quit")
 		separator()
 
@@ -345,6 +358,225 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 			separator()
 			for _, n := range nodes {
 				fmt.Printf("  %-8s  %s:%d\n", n.Name, n.Host, n.Port)
+			}
+
+		case "7", "ticket", "raise":
+			if svc == nil {
+				fmt.Println("  ticket service not available")
+				continue
+			}
+			separator()
+			fmt.Println("  raise ticket")
+			separator()
+			idUsuarioStr := prompt(sc, "  usuario ID: ")
+			idUsuario, err := strconv.Atoi(idUsuarioStr)
+			if err != nil {
+				fmt.Printf("  invalid usuario ID: %v\n", err)
+				continue
+			}
+			idDispositivoStr := prompt(sc, "  dispositivo ID: ")
+			idDispositivo, err := strconv.Atoi(idDispositivoStr)
+			if err != nil {
+				fmt.Printf("  invalid dispositivo ID: %v\n", err)
+				continue
+			}
+			separator()
+			fmt.Println("  raising ticket (acquiring lock + consensus)...")
+			if err := svc.RaiseTicket(ctx, idUsuario, idDispositivo); err != nil {
+				fmt.Printf("  error: %v\n", err)
+			} else {
+				fmt.Println("  ✓ ticket raised")
+			}
+
+		case "8", "close":
+			if svc == nil {
+				fmt.Println("  ticket service not available")
+				continue
+			}
+			separator()
+			fmt.Println("  close ticket")
+			separator()
+			idTicketStr := prompt(sc, "  ticket ID: ")
+			idTicket, err := strconv.ParseInt(idTicketStr, 10, 64)
+			if err != nil {
+				fmt.Printf("  invalid ticket ID: %v\n", err)
+				continue
+			}
+			idIngenieroStr := prompt(sc, "  ingeniero ID: ")
+			idIngeniero, err := strconv.Atoi(idIngenieroStr)
+			if err != nil {
+				fmt.Printf("  invalid ingeniero ID: %v\n", err)
+				continue
+			}
+			separator()
+			if err := svc.CloseTicket(ctx, idTicket, idIngeniero); err != nil {
+				fmt.Printf("  error: %v\n", err)
+			} else {
+				fmt.Println("  ✓ ticket closed")
+			}
+
+		case "9", "tickets":
+			if svc == nil {
+				fmt.Println("  ticket service not available")
+				continue
+			}
+			separator()
+			fmt.Println("  all tickets")
+			separator()
+			rows, err := svc.ListAll(ctx, "TICKETS")
+			if err != nil {
+				fmt.Printf("  error: %v\n", err)
+				continue
+			}
+			if len(rows) == 0 {
+				fmt.Println("  no tickets yet")
+				continue
+			}
+			fmt.Printf("  %-10s  %-10s  %-10s  %-10s  %-10s  %-8s  %s\n",
+				"ID", "USUARIO", "INGENIERO", "SUCURSAL", "DISPOSITIVO", "ESTADO", "FOLIO")
+			for _, r := range rows {
+				if t, ok := r.(dto.TicketRow); ok {
+					fmt.Printf("  %-10d  %-10d  %-10d  %-10d  %-10d  %-8s  %s\n",
+						t.ID, t.IDUsuario, t.IDIngeniero, t.IDSucursal, t.IDDispositivo, t.Estado, t.Folio)
+				}
+			}
+
+		case "10", "adduser":
+			if svc == nil {
+				fmt.Println("  ticket service not available")
+				continue
+			}
+			separator()
+			fmt.Println("  add user")
+			separator()
+			nombre := prompt(sc, "  nombre: ")
+			if nombre == "" {
+				fmt.Println("  error: nombre required")
+				continue
+			}
+			if err := svc.AddUsuario(ctx, nombre); err != nil {
+				fmt.Printf("  error: %v\n", err)
+			} else {
+				fmt.Println("  ✓ usuario added")
+			}
+
+		case "11", "addengineer":
+			if svc == nil {
+				fmt.Println("  ticket service not available")
+				continue
+			}
+			separator()
+			fmt.Println("  add engineer")
+			separator()
+			nombre := prompt(sc, "  nombre: ")
+			if nombre == "" {
+				fmt.Println("  error: nombre required")
+				continue
+			}
+			if err := svc.AddIngeniero(ctx, nombre); err != nil {
+				fmt.Printf("  error: %v\n", err)
+			} else {
+				fmt.Println("  ✓ ingeniero added")
+			}
+
+		case "12", "adddevice":
+			if svc == nil {
+				fmt.Println("  ticket service not available")
+				continue
+			}
+			separator()
+			fmt.Println("  add device (master distributes equitably)")
+			separator()
+			nombre := prompt(sc, "  nombre: ")
+			if nombre == "" {
+				fmt.Println("  error: nombre required")
+				continue
+			}
+			tipo := prompt(sc, "  tipo: ")
+			if tipo == "" {
+				fmt.Println("  error: tipo required")
+				continue
+			}
+			if err := svc.AddDevice(ctx, nombre, tipo); err != nil {
+				fmt.Printf("  error: %v\n", err)
+			} else {
+				fmt.Println("  ✓ device queued for distribution")
+			}
+
+		case "13", "users":
+			if svc == nil {
+				fmt.Println("  ticket service not available")
+				continue
+			}
+			separator()
+			fmt.Println("  all users (distributed)")
+			separator()
+			rows, err := svc.ListAll(ctx, "USUARIOS")
+			if err != nil {
+				fmt.Printf("  error: %v\n", err)
+				continue
+			}
+			if len(rows) == 0 {
+				fmt.Println("  no users yet")
+				continue
+			}
+			fmt.Printf("  %-10s  %-20s  %s\n", "ID", "NOMBRE", "SUCURSAL")
+			for _, r := range rows {
+				if u, ok := r.(dto.UsuarioRow); ok {
+					fmt.Printf("  %-10d  %-20s  %d\n", u.ID, u.Nombre, u.SucursalID)
+				}
+			}
+
+		case "14", "engineers":
+			if svc == nil {
+				fmt.Println("  ticket service not available")
+				continue
+			}
+			separator()
+			fmt.Println("  all engineers (distributed)")
+			separator()
+			rows, err := svc.ListAll(ctx, "INGENIEROS")
+			if err != nil {
+				fmt.Printf("  error: %v\n", err)
+				continue
+			}
+			if len(rows) == 0 {
+				fmt.Println("  no engineers yet")
+				continue
+			}
+			fmt.Printf("  %-10s  %-20s  %-10s  %s\n", "ID", "NOMBRE", "SUCURSAL", "DISPONIBLE")
+			for _, r := range rows {
+				if e, ok := r.(dto.IngenieroRow); ok {
+					disp := "SI"
+					if e.Disponible == 0 {
+						disp = "NO"
+					}
+					fmt.Printf("  %-10d  %-20s  %-10d  %s\n", e.ID, e.Nombre, e.SucursalID, disp)
+				}
+			}
+
+		case "15", "devices":
+			if svc == nil {
+				fmt.Println("  ticket service not available")
+				continue
+			}
+			separator()
+			fmt.Println("  all devices (distributed)")
+			separator()
+			rows, err := svc.ListAll(ctx, "DISPOSITIVOS")
+			if err != nil {
+				fmt.Printf("  error: %v\n", err)
+				continue
+			}
+			if len(rows) == 0 {
+				fmt.Println("  no devices yet")
+				continue
+			}
+			fmt.Printf("  %-10s  %-20s  %-15s  %s\n", "ID", "NOMBRE", "TIPO", "SUCURSAL")
+			for _, r := range rows {
+				if d, ok := r.(dto.DispositivoRow); ok {
+					fmt.Printf("  %-10d  %-20s  %-15s  %d\n", d.ID, d.Nombre, d.Tipo, d.SucursalID)
+				}
 			}
 
 		case "6", "q", "quit", "exit", "":

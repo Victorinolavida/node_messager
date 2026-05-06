@@ -21,9 +21,19 @@ build-linux:
 build-linux-arm:
 	GOOS=linux GOARCH=arm64 $(GO) build -ldflags "-X main.debug=false" -o $(BINARY)_linux_arm64 $(CMD)
 
+# Run with all 3 nodes locally (dev/testing)
+.PHONY: run-dev
+run-dev:
+	cp nodes-dev.json nodes.json && $(GO) run $(CMD)
+
+# Run with original nodes.json (VM/host mode)
 .PHONY: run
 run:
 	$(GO) run $(CMD)
+
+.PHONY: test
+test:
+	$(GO) test ./...
 
 .PHONY: tidy
 tidy:
@@ -32,3 +42,4 @@ tidy:
 .PHONY: clean
 clean:
 	rm -f $(BINARY) $(BINARY)_linux_amd64 $(BINARY)_linux_arm64
+	rm -rf data/ tickets/

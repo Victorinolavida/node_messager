@@ -11,6 +11,7 @@ import (
 type Config struct {
 	Nodes    []node.Node
 	HostNode *node.Node
+	MasterID int
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -28,6 +29,10 @@ func LoadConfig(path string) (Config, error) {
 			return Config{}, err
 		}
 		cfg.HostNode = &h
+	}
+	cfg.MasterID = k.Int("master_id")
+	if cfg.MasterID == 0 && len(cfg.Nodes) > 0 {
+		cfg.MasterID = cfg.Nodes[0].ID // default to first node
 	}
 	return cfg, nil
 }

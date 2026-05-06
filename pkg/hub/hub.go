@@ -18,6 +18,10 @@ type Client struct {
 	send chan []byte
 }
 
+type Dispatcher interface {
+	Dispatch(msg dto.Message)
+}
+
 type Hub struct {
 	name       string
 	clients    map[*Client]bool
@@ -26,7 +30,10 @@ type Hub struct {
 	unregister chan *Client
 	log        *zap.SugaredLogger
 	store      *msgstore.Store
+	dispatcher Dispatcher
 }
+
+func (h *Hub) SetDispatcher(d Dispatcher) { h.dispatcher = d }
 
 func New(name string, log *zap.SugaredLogger, store *msgstore.Store) *Hub {
 	return &Hub{
@@ -65,6 +72,10 @@ func (h *Hub) Run() {
 			}
 			h.log.Infof("[%s] recv  type=%s from=%s to=%s id=%s — %q",
 				h.name, msg.Type, msg.FromNode, msg.ToNode, msg.ID, msg.Content)
+
+			if h.dispatcher != nil {
+				go h.dispatcher.Dispatch(msg)
+			}
 
 			for c := range h.clients {
 				select {
