@@ -14,11 +14,12 @@ import (
 	"node_messager/pkg/sender"
 )
 
-const (
-	pingInterval = 5 * time.Second
-	pongWait     = 2 * time.Second
-	maxMissed    = 3
+var (
+	pingInterval = 5 * time.Second // var so tests can override
+	pongWait     = 2 * time.Second // var so tests can override
 )
+
+const maxMissed = 3
 
 type Monitor struct {
 	self     node.Node

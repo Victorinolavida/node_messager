@@ -12,7 +12,7 @@ import (
 	"node_messager/pkg/sender"
 )
 
-const okTimeout = 3 * time.Second
+var okTimeout = 3 * time.Second // var so tests can override
 
 type Engine struct {
 	self      node.Node

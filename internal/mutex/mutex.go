@@ -15,7 +15,7 @@ import (
 	"node_messager/pkg/sender"
 )
 
-const lockTimeout = 5 * time.Second
+var lockTimeout = 5 * time.Second // var so tests can override
 
 type pendingReq struct {
 	requestID string

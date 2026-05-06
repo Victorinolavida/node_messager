@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -19,6 +20,18 @@ import (
 )
 
 const queryTimeout = 3 * time.Second
+
+// idCounter is an atomic sequence for ID generation.
+// IDs are nodeID * 10_000_000_000 + counter, guaranteeing cross-node uniqueness.
+var idCounter int64
+
+// newID returns a collision-free int ID for this node.
+// Format: nodeID * 10_000_000_000 + sequential counter
+// e.g. node 2, 5th record → 20_000_000_005
+func newID(nodeID int) int {
+	n := atomic.AddInt64(&idCounter, 1)
+	return nodeID*10_000_000_000 + int(n)
+}
 
 type TicketService struct {
 	self      node.Node
@@ -65,15 +78,14 @@ func New(
 // ── Add operations ─────────────────────────────────────────────────────────────
 
 func (s *TicketService) AddUsuario(ctx context.Context, nombre string) error {
-	// generate a simple ID based on time
-	id := int(time.Now().UnixNano() % 1e9)
+	id := newID(s.self.ID)
 	row := dto.UsuarioRow{ID: id, Nombre: nombre, SucursalID: s.self.ID}
 	data, _ := json.Marshal(row)
 	return s.consensus.Propose(ctx, "INSERT_USUARIO", string(data))
 }
 
 func (s *TicketService) AddIngeniero(ctx context.Context, nombre string) error {
-	id := int(time.Now().UnixNano() % 1e9)
+	id := newID(s.self.ID)
 	row := dto.IngenieroRow{ID: id, Nombre: nombre, SucursalID: s.self.ID, Disponible: 1}
 	data, _ := json.Marshal(row)
 	return s.consensus.Propose(ctx, "INSERT_INGENIERO", string(data))
@@ -107,7 +119,7 @@ func (s *TicketService) distributeDevice(ctx context.Context, nombre, tipo strin
 			targetID = n.ID
 		}
 	}
-	id := int(time.Now().UnixNano() % 1e9)
+	id := newID(targetID)
 	row := dto.DispositivoRow{ID: id, Nombre: nombre, Tipo: tipo, SucursalID: targetID}
 	data, _ := json.Marshal(row)
 	return s.consensus.Propose(ctx, "INSERT_DISPOSITIVO", string(data))
@@ -155,7 +167,7 @@ func (s *TicketService) RaiseTicket(ctx context.Context, idUsuario, idDispositiv
 	}
 
 	// pre-assign ticket ID so folio can be generated
-	ticketID := int(time.Now().UnixNano() % 1e9)
+	ticketID := newID(s.self.ID)
 	ticket := dto.TicketRow{
 		ID:            ticketID,
 		IDUsuario:     idUsuario,

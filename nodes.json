@@ -1,9 +1,8 @@
 {
   "master_id": 1,
   "nodes": [
-    { "id": 1, "name": "sucursal1", "host": "192.168.100.10", "port": 5001 },
-    { "id": 2, "name": "sucursal2", "host": "192.168.100.11", "port": 5001 },
-    { "id": 3, "name": "sucursal3", "host": "192.168.100.12", "port": 5001 }
-  ],
-  "host": { "id": 1, "name": "sucursal1", "host": "0.0.0.0", "port": 5001 }
+    { "id": 1, "name": "sucursal1", "host": "localhost", "port": 5001 },
+    { "id": 2, "name": "sucursal2", "host": "localhost", "port": 5002 },
+    { "id": 3, "name": "sucursal3", "host": "localhost", "port": 5003 }
+  ]
 }

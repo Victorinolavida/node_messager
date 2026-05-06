@@ -13,14 +13,18 @@ type DB struct {
 }
 
 func Open(name string) (*DB, error) {
-	path := fmt.Sprintf("data/%s.db", name)
+	return openAt(fmt.Sprintf("data/%s.db", name))
+}
+
+func openAt(path string) (*DB, error) {
 	sqlDB, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	sqlDB.SetMaxOpenConns(1) // SQLite WAL not needed; serialize writes
+	sqlDB.SetMaxOpenConns(1)
 	d := &DB{sql: sqlDB}
 	if err := d.migrate(); err != nil {
+		_ = sqlDB.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return d, nil
