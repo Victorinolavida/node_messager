@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chzyer/readline"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"node_messager/internal/service"
@@ -66,22 +67,25 @@ func separator() {
 	fmt.Println()
 }
 
-func prompt(sc *bufio.Scanner, label string) string {
-	fmt.Print(label)
-	if !sc.Scan() {
+// prompt reads a line with full line-editing support (backspace, arrows, etc.).
+// Returns "" on EOF or Ctrl+C/Ctrl+D.
+func prompt(rl *readline.Instance, label string) string {
+	rl.SetPrompt(label)
+	line, err := rl.Readline()
+	if err != nil { // io.EOF or readline.ErrInterrupt
 		return ""
 	}
-	return strings.TrimSpace(sc.Text())
+	return strings.TrimSpace(line)
 }
 
-func pickNode(sc *bufio.Scanner, nodes []node.Node, label string) (node.Node, bool) {
+func pickNode(rl *readline.Instance, nodes []node.Node, label string) (node.Node, bool) {
 	fmt.Println(label)
 	for i, n := range nodes {
 		fmt.Printf("  %d) %-8s  %s:%d\n", i+1, n.Name, n.Host, n.Port)
 	}
 	fmt.Println()
 	for {
-		raw := prompt(sc, "choice> ")
+		raw := prompt(rl, "choice> ")
 		if raw == "" {
 			return node.Node{}, false
 		}
@@ -213,7 +217,16 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 	pool := newConnPool(log)
 	defer pool.closeAll()
 
-	sc := bufio.NewScanner(os.Stdin)
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:          "> ",
+		InterruptPrompt: "^C",
+		EOFPrompt:       "exit",
+	})
+	if err != nil {
+		return fmt.Errorf("readline init: %w", err)
+	}
+	defer rl.Close()
+
 	ctx := context.Background()
 
 	for {
@@ -241,7 +254,12 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 		fmt.Println("  6) quit")
 		separator()
 
-		choice := prompt(sc, "> ")
+		choice := prompt(rl, "> ")
+		if choice == "" {
+			// EOF or Ctrl+D — treat as quit
+			return nil
+		}
+
 		switch choice {
 
 		case "1", "send":
@@ -254,7 +272,7 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 				from = *hostNode
 				fmt.Printf("  from: %s\n\n", from.Name)
 			} else {
-				if from, ok = pickNode(sc, nodes, "  from node:"); !ok {
+				if from, ok = pickNode(rl, nodes, "  from node:"); !ok {
 					continue
 				}
 			}
@@ -264,12 +282,12 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 					targets = append(targets, n)
 				}
 			}
-			to, ok := pickNode(sc, targets, "  to node:")
+			to, ok := pickNode(rl, targets, "  to node:")
 			if !ok {
 				continue
 			}
 			fmt.Printf("\n  %s → %s\n", from.Name, to.Name)
-			content := prompt(sc, "  message: ")
+			content := prompt(rl, "  message: ")
 			if content == "" {
 				fmt.Println("\n  error: message cannot be empty")
 				continue
@@ -291,12 +309,12 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 				from = *hostNode
 				fmt.Printf("  from: %s → all nodes\n\n", from.Name)
 			} else {
-				if from, ok = pickNode(sc, nodes, "  from node:"); !ok {
+				if from, ok = pickNode(rl, nodes, "  from node:"); !ok {
 					continue
 				}
 				fmt.Printf("\n  %s → all nodes\n", from.Name)
 			}
-			content := prompt(sc, "  message: ")
+			content := prompt(rl, "  message: ")
 			if content == "" {
 				fmt.Println("\n  error: message cannot be empty")
 				continue
@@ -325,7 +343,7 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 				entries, _ := stores[hostNode.ID].Latest(50)
 				printEntries(hostNode.Name, entries)
 			} else {
-				n, ok := pickNode(sc, nodes, "  select node:")
+				n, ok := pickNode(rl, nodes, "  select node:")
 				if !ok {
 					continue
 				}
@@ -343,7 +361,7 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 				fmt.Printf("  logs — %s\n\n", hostNode.Name)
 				tailLogFile(hostNode.Name, logLines)
 			} else {
-				n, ok := pickNode(sc, nodes, "  select node:")
+				n, ok := pickNode(rl, nodes, "  select node:")
 				if !ok {
 					continue
 				}
@@ -368,13 +386,13 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 			separator()
 			fmt.Println("  raise ticket")
 			separator()
-			idUsuarioStr := prompt(sc, "  usuario ID: ")
+			idUsuarioStr := prompt(rl, "  usuario ID: ")
 			idUsuario, err := strconv.Atoi(idUsuarioStr)
 			if err != nil {
 				fmt.Printf("  invalid usuario ID: %v\n", err)
 				continue
 			}
-			idDispositivoStr := prompt(sc, "  dispositivo ID: ")
+			idDispositivoStr := prompt(rl, "  dispositivo ID: ")
 			idDispositivo, err := strconv.Atoi(idDispositivoStr)
 			if err != nil {
 				fmt.Printf("  invalid dispositivo ID: %v\n", err)
@@ -396,13 +414,13 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 			separator()
 			fmt.Println("  close ticket")
 			separator()
-			idTicketStr := prompt(sc, "  ticket ID: ")
+			idTicketStr := prompt(rl, "  ticket ID: ")
 			idTicket, err := strconv.ParseInt(idTicketStr, 10, 64)
 			if err != nil {
 				fmt.Printf("  invalid ticket ID: %v\n", err)
 				continue
 			}
-			idIngenieroStr := prompt(sc, "  ingeniero ID: ")
+			idIngenieroStr := prompt(rl, "  ingeniero ID: ")
 			idIngeniero, err := strconv.Atoi(idIngenieroStr)
 			if err != nil {
 				fmt.Printf("  invalid ingeniero ID: %v\n", err)
@@ -449,7 +467,7 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 			separator()
 			fmt.Println("  add user")
 			separator()
-			nombre := prompt(sc, "  nombre: ")
+			nombre := prompt(rl, "  nombre: ")
 			if nombre == "" {
 				fmt.Println("  error: nombre required")
 				continue
@@ -468,7 +486,7 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 			separator()
 			fmt.Println("  add engineer")
 			separator()
-			nombre := prompt(sc, "  nombre: ")
+			nombre := prompt(rl, "  nombre: ")
 			if nombre == "" {
 				fmt.Println("  error: nombre required")
 				continue
@@ -487,12 +505,12 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 			separator()
 			fmt.Println("  add device (master distributes equitably)")
 			separator()
-			nombre := prompt(sc, "  nombre: ")
+			nombre := prompt(rl, "  nombre: ")
 			if nombre == "" {
 				fmt.Println("  error: nombre required")
 				continue
 			}
-			tipo := prompt(sc, "  tipo: ")
+			tipo := prompt(rl, "  tipo: ")
 			if tipo == "" {
 				fmt.Println("  error: tipo required")
 				continue
@@ -579,7 +597,7 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 				}
 			}
 
-		case "6", "q", "quit", "exit", "":
+		case "6", "q", "quit", "exit":
 			return nil
 
 		default:
@@ -587,3 +605,4 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 		}
 	}
 }
+
