@@ -12,13 +12,16 @@ import (
 )
 
 type tcpServer struct {
-	node  node.Node
-	store *msgstore.Store
+	node       node.Node
+	store      *msgstore.Store
+	dispatcher hub.Dispatcher
 }
 
 func New(n node.Node, store *msgstore.Store) *tcpServer {
 	return &tcpServer{node: n, store: store}
 }
+
+func (s *tcpServer) SetDispatcher(d hub.Dispatcher) { s.dispatcher = d }
 
 func (s *tcpServer) Start(ctx context.Context) error {
 	addr := fmt.Sprintf(":%d", s.node.Port)
@@ -34,6 +37,9 @@ func (s *tcpServer) Start(ctx context.Context) error {
 func (s *tcpServer) serve(ctx context.Context, ln net.Listener) error {
 	l := logger.GetContextLogger(ctx)
 	h := hub.New(s.node.Name, l, s.store)
+	if s.dispatcher != nil {
+		h.SetDispatcher(s.dispatcher)
+	}
 	go h.Run()
 	l.Infof("[%s] listening on %s", s.node.Name, ln.Addr())
 

@@ -9,8 +9,9 @@ import (
 )
 
 type Config struct {
-	Nodes    []node.Node
-	HostNode *node.Node
+	Nodes    []node.Node // all sucursales — one of them is initial master
+	HostNode *node.Node  // which node runs locally (VM mode)
+	MasterID int         // ID of the sucursal that starts as master
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -28,6 +29,10 @@ func LoadConfig(path string) (Config, error) {
 			return Config{}, err
 		}
 		cfg.HostNode = &h
+	}
+	cfg.MasterID = k.Int("master_id")
+	if cfg.MasterID == 0 && len(cfg.Nodes) > 0 {
+		cfg.MasterID = cfg.Nodes[0].ID
 	}
 	return cfg, nil
 }

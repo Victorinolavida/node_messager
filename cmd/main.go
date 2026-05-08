@@ -2,16 +2,28 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 	"node_messager/internal/adapters/cli"
 	"node_messager/internal/config"
+	"node_messager/internal/consensus"
+	"node_messager/internal/db"
+	"node_messager/internal/dispatcher"
+	"node_messager/internal/election"
+	"node_messager/internal/heartbeat"
+	"node_messager/internal/mutex"
+	"node_messager/internal/nodestate"
+	"node_messager/internal/service"
+	"node_messager/pkg/dto"
 	logger "node_messager/pkg/logger"
 	"node_messager/pkg/msgstore"
 	"node_messager/pkg/node"
+	"node_messager/pkg/sender"
 	tcpserver "node_messager/pkg/tcp_server"
 )
 
@@ -26,31 +38,22 @@ func main() {
 		startupLog.Fatalf("load config: %v", err)
 	}
 
-	if err := os.MkdirAll("logs", 0755); err != nil {
-		startupLog.Fatalf("create logs dir: %v", err)
-	}
-	if err := os.MkdirAll("messages", 0755); err != nil {
-		startupLog.Fatalf("create messages dir: %v", err)
+	for _, dir := range []string{"logs", "messages", "data", "tickets"} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			startupLog.Fatalf("create %s dir: %v", dir, err)
+		}
 	}
 
 	debugMode := debug == "true"
 
-	// When host is defined, only run server+store for host node.
-	// Otherwise run server+store for every node in the list.
+	// In VM mode only the host node runs locally; in dev mode all sucursales run.
 	serveNodes := cfg.Nodes
 	if cfg.HostNode != nil {
 		serveNodes = []node.Node{*cfg.HostNode}
 	}
 
-	// When host is defined, only the host node's store is file-backed — remote
-	// nodes run on other machines so a local file would not reflect their real state.
-	// When no host is defined (dev mode), all nodes get file-backed stores.
-	allNodes := append([]node.Node{}, cfg.Nodes...)
-	if cfg.HostNode != nil {
-		allNodes = append(allNodes, *cfg.HostNode)
-	}
-	stores := make(map[int]*msgstore.Store, len(allNodes))
-	for _, n := range allNodes {
+	stores := make(map[int]*msgstore.Store, len(cfg.Nodes))
+	for _, n := range cfg.Nodes {
 		isLocal := cfg.HostNode == nil || n.ID == cfg.HostNode.ID
 		if isLocal {
 			store, err := msgstore.NewWithFile(50, fmt.Sprintf("messages/%s.jsonl", n.Name))
@@ -64,6 +67,8 @@ func main() {
 	}
 
 	nodeLogs := make(map[int]*zap.SugaredLogger, len(serveNodes))
+	nodeServices := make(map[int]*service.TicketService, len(serveNodes))
+
 	var wg sync.WaitGroup
 	for _, n := range serveNodes {
 		n := n
@@ -77,18 +82,151 @@ func main() {
 		nodeLogs[n.ID] = nodeLog
 		nodeCtx := logger.SetContextLogger(context.Background(), nodeLog)
 
+		nodeDB, err := db.Open(n.Name)
+		if err != nil {
+			startupLog.Fatalf("[%s] open db: %v", n.Name, err)
+		}
+		if v, err := nodeDB.Version(); err == nil {
+			startupLog.Infof("[%s] db schema version: %d", n.Name, v)
+		}
+
+		ns := nodestate.New(n, cfg.Nodes, cfg.MasterID)
+		pool := sender.NewPool(nodeLog)
+		commitHandler := buildCommitHandler(n, nodeDB, nodeLog)
+
+		consEngine := consensus.New(n, ns, pool, nodeLog, commitHandler)
+		mtxEngine := mutex.New(n, ns, pool, nodeLog)
+		elecEngine := election.New(n, ns, pool, nodeLog)
+		hbMonitor := heartbeat.New(n, ns, pool, elecEngine, nodeLog)
+		svc := service.New(n, ns, nodeDB, pool, consEngine, mtxEngine, nodeLog)
+
+		hbMonitor.OnNodeDead = func(deadID int) {
+			svc.RedistributeTickets(nodeCtx, deadID)
+		}
+
+		nodeServices[n.ID] = svc
+
+		disp := dispatcher.New(nodeCtx, ns, consEngine, mtxEngine, elecEngine, hbMonitor, svc, nodeLog)
+
+		// initial master sucursal announces itself on startup
+		if n.ID == cfg.MasterID {
+			go func(e *election.Engine) {
+				time.Sleep(2 * time.Second)
+				e.ClaimMastership()
+			}(elecEngine)
+		}
+
 		wg.Add(1)
 		srv := tcpserver.New(n, stores[n.ID])
+		srv.SetDispatcher(disp)
 		go func() {
 			wg.Done()
 			if err := srv.Start(nodeCtx); err != nil {
 				nodeLog.Errorf("[%s] server error: %s", n.Name, err)
 			}
 		}()
+
+		go hbMonitor.Run(nodeCtx)
 	}
 	wg.Wait()
 
-	if err := cli.Run(cfg.Nodes, stores, cfg.HostNode, startupLog, nodeLogs); err != nil {
+	// CLI uses the host sucursal in VM mode, or first sucursal in dev mode.
+	var cliSvc *service.TicketService
+	var cliHostNode *node.Node
+
+	if cfg.HostNode != nil {
+		cliSvc = nodeServices[cfg.HostNode.ID]
+		cliHostNode = cfg.HostNode
+	} else if len(cfg.Nodes) > 0 {
+		cliSvc = nodeServices[cfg.Nodes[0].ID]
+	}
+
+	if err := cli.Run(cfg.Nodes, stores, cliHostNode, cliSvc, startupLog, nodeLogs); err != nil {
 		startupLog.Fatalf("cli error: %v", err)
+	}
+}
+
+func buildCommitHandler(self node.Node, nodeDB *db.DB, log *zap.SugaredLogger) func(operation, data string) error {
+	return func(operation, data string) error {
+		switch operation {
+		case "INSERT_USUARIO":
+			var r dto.UsuarioRow
+			if err := json.Unmarshal([]byte(data), &r); err != nil {
+				return err
+			}
+			if r.SucursalID != self.ID {
+				return nil
+			}
+			return nodeDB.InsertUsuario(r.ID, r.Nombre, r.SucursalID)
+
+		case "INSERT_INGENIERO":
+			var r dto.IngenieroRow
+			if err := json.Unmarshal([]byte(data), &r); err != nil {
+				return err
+			}
+			if r.SucursalID != self.ID {
+				return nil
+			}
+			return nodeDB.InsertIngeniero(r.ID, r.Nombre, r.SucursalID)
+
+		case "INSERT_DISPOSITIVO":
+			var r dto.DispositivoRow
+			if err := json.Unmarshal([]byte(data), &r); err != nil {
+				return err
+			}
+			if r.SucursalID != self.ID {
+				return nil
+			}
+			return nodeDB.InsertDispositivo(r.ID, r.Nombre, r.Tipo, r.SucursalID, r.IngenieroID)
+
+		case "INSERT_TICKET", "REASSIGN_TICKET":
+			var r dto.TicketRow
+			if err := json.Unmarshal([]byte(data), &r); err != nil {
+				return err
+			}
+			if r.IDSucursal != self.ID {
+				return nil
+			}
+			t := db.Ticket{
+				ID: int64(r.ID), IDUsuario: r.IDUsuario, IDIngeniero: r.IDIngeniero,
+				IDSucursal: r.IDSucursal, IDDispositivo: r.IDDispositivo,
+				Estado: r.Estado, Folio: r.Folio, CreatedAt: r.CreatedAt,
+			}
+			return nodeDB.InsertTicketFull(t)
+
+		case "UPDATE_TICKET_FOLIO":
+			var p struct {
+				IDTicket int    `json:"id_ticket"`
+				Folio    string `json:"folio"`
+			}
+			if err := json.Unmarshal([]byte(data), &p); err != nil {
+				return err
+			}
+			return nodeDB.UpdateTicketFolio(int64(p.IDTicket), p.Folio)
+
+		case "CLOSE_TICKET":
+			var p struct {
+				IDTicket    int64 `json:"id_ticket"`
+				IDIngeniero int   `json:"id_ingeniero"`
+			}
+			if err := json.Unmarshal([]byte(data), &p); err != nil {
+				return err
+			}
+			if err := nodeDB.CloseTicket(p.IDTicket); err != nil {
+				return err
+			}
+			return nodeDB.SetIngenieroDisponible(p.IDIngeniero, 1)
+
+		case "UPDATE_INGENIERO_DISPONIBLE":
+			var r dto.IngenieroRow
+			if err := json.Unmarshal([]byte(data), &r); err != nil {
+				return err
+			}
+			return nodeDB.SetIngenieroDisponible(r.ID, r.Disponible)
+
+		default:
+			log.Warnf("[commit] unknown operation: %s", operation)
+			return nil
+		}
 	}
 }
