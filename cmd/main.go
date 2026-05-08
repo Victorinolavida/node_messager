@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 	"node_messager/internal/adapters/cli"
@@ -18,10 +19,10 @@ import (
 	"node_messager/internal/mutex"
 	"node_messager/internal/nodestate"
 	"node_messager/internal/service"
+	"node_messager/pkg/dto"
 	logger "node_messager/pkg/logger"
 	"node_messager/pkg/msgstore"
 	"node_messager/pkg/node"
-	"node_messager/pkg/dto"
 	"node_messager/pkg/sender"
 	tcpserver "node_messager/pkg/tcp_server"
 )
@@ -45,18 +46,21 @@ func main() {
 
 	debugMode := debug == "true"
 
-	serveNodes := cfg.Nodes
+	// allNodes = sucursales + master node (for routing)
+	allNodes := cfg.AllNodes()
+
+	// serveNodes = nodes whose TCP server runs locally
+	// In VM mode: only the host node. In dev mode: all nodes.
+	var serveNodes []node.Node
 	if cfg.HostNode != nil {
 		serveNodes = []node.Node{*cfg.HostNode}
+	} else {
+		serveNodes = allNodes
 	}
 
-	allNodes := append([]node.Node{}, cfg.Nodes...)
-	if cfg.HostNode != nil {
-		allNodes = append(allNodes, *cfg.HostNode)
-	}
-
-	stores := make(map[int]*msgstore.Store, len(allNodes))
-	for _, n := range allNodes {
+	// msgstore per served node
+	stores := make(map[int]*msgstore.Store, len(serveNodes))
+	for _, n := range serveNodes {
 		isLocal := cfg.HostNode == nil || n.ID == cfg.HostNode.ID
 		if isLocal {
 			store, err := msgstore.NewWithFile(50, fmt.Sprintf("messages/%s.jsonl", n.Name))
@@ -94,33 +98,34 @@ func main() {
 			startupLog.Infof("[%s] db schema version: %d", n.Name, v)
 		}
 
-		// build node state
 		ns := nodestate.New(n, allNodes, cfg.MasterID)
-
-		// shared sender pool for this node's outgoing connections
 		pool := sender.NewPool(nodeLog)
-
-		// consensus commit handler — applies committed operations to local DB
 		commitHandler := buildCommitHandler(n, nodeDB, nodeLog)
 
-		// build engines
 		consEngine := consensus.New(n, ns, pool, nodeLog, commitHandler)
 		mtxEngine := mutex.New(n, ns, pool, nodeLog)
 		elecEngine := election.New(n, ns, pool, nodeLog)
 		hbMonitor := heartbeat.New(n, ns, pool, elecEngine, nodeLog)
 		svc := service.New(n, ns, nodeDB, pool, consEngine, mtxEngine, nodeLog)
 
-		// wire redistribution callback on heartbeat
 		hbMonitor.OnNodeDead = func(deadID int) {
 			svc.RedistributeTickets(nodeCtx, deadID)
 		}
 
 		nodeServices[n.ID] = svc
 
-		// build dispatcher
 		disp := dispatcher.New(nodeCtx, ns, consEngine, mtxEngine, elecEngine, hbMonitor, svc, nodeLog)
 
-		// start TCP server
+		// if this node is the original master (ID==cfg.MasterID from dedicated master block),
+		// claim mastership after a brief delay to allow connections to establish
+		isMaster := cfg.MasterNode != nil && n.ID == cfg.MasterNode.ID
+		if isMaster {
+			go func(e *election.Engine) {
+				time.Sleep(2 * time.Second)
+				e.ClaimMastership()
+			}(elecEngine)
+		}
+
 		wg.Add(1)
 		srv := tcpserver.New(n, stores[n.ID])
 		srv.SetDispatcher(disp)
@@ -131,20 +136,33 @@ func main() {
 			}
 		}()
 
-		// start heartbeat
 		go hbMonitor.Run(nodeCtx)
 	}
 	wg.Wait()
 
-	// pick first serve node's service for CLI (host mode: only one; dev mode: first)
+	// CLI only uses a sucursal node (never the master node directly)
+	// In host mode: use the host. In dev mode: use first sucursal (not the master).
 	var cliSvc *service.TicketService
+	var cliHostNode *node.Node
+
 	if cfg.HostNode != nil {
-		cliSvc = nodeServices[cfg.HostNode.ID]
-	} else if len(serveNodes) > 0 {
-		cliSvc = nodeServices[serveNodes[0].ID]
+		// VM mode: host is whatever node is local
+		// Only show in CLI if it's a sucursal (not the master)
+		if cfg.MasterNode == nil || cfg.HostNode.ID != cfg.MasterNode.ID {
+			cliSvc = nodeServices[cfg.HostNode.ID]
+			cliHostNode = cfg.HostNode
+		}
+	} else {
+		// Dev mode: pick first sucursal (cfg.Nodes, excludes master)
+		if len(cfg.Nodes) > 0 {
+			first := cfg.Nodes[0]
+			cliSvc = nodeServices[first.ID]
+			// no hostNode in dev mode — CLI can pick from all sucursales
+		}
 	}
 
-	if err := cli.Run(cfg.Nodes, stores, cfg.HostNode, cliSvc, startupLog, nodeLogs); err != nil {
+	// CLI receives only sucursales (cfg.Nodes), master is hidden
+	if err := cli.Run(cfg.Nodes, stores, cliHostNode, cliSvc, startupLog, nodeLogs); err != nil {
 		startupLog.Fatalf("cli error: %v", err)
 	}
 }
@@ -159,7 +177,7 @@ func buildCommitHandler(self node.Node, nodeDB *db.DB, log *zap.SugaredLogger) f
 				return err
 			}
 			if r.SucursalID != self.ID {
-				return nil // not our fragment
+				return nil
 			}
 			return nodeDB.InsertUsuario(r.ID, r.Nombre, r.SucursalID)
 
@@ -216,11 +234,9 @@ func buildCommitHandler(self node.Node, nodeDB *db.DB, log *zap.SugaredLogger) f
 			if err := json.Unmarshal([]byte(data), &p); err != nil {
 				return err
 			}
-			// close on any node that has it
 			if err := nodeDB.CloseTicket(p.IDTicket); err != nil {
 				return err
 			}
-			// mark engineer available
 			return nodeDB.SetIngenieroDisponible(p.IDIngeniero, 1)
 
 		case "UPDATE_INGENIERO_DISPONIBLE":
