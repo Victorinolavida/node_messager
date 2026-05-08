@@ -590,10 +590,10 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 				fmt.Println("  no devices yet")
 				continue
 			}
-			fmt.Printf("  %-10s  %-20s  %-15s  %s\n", "ID", "NOMBRE", "TIPO", "SUCURSAL")
+			fmt.Printf("  %-10s  %-20s  %-15s  %-10s  %s\n", "ID", "NOMBRE", "TIPO", "SUCURSAL", "INGENIERO")
 			for _, r := range rows {
 				if d, ok := r.(dto.DispositivoRow); ok {
-					fmt.Printf("  %-10d  %-20s  %-15s  %d\n", d.ID, d.Nombre, d.Tipo, d.SucursalID)
+					fmt.Printf("  %-10d  %-20s  %-15s  %-10d  %d\n", d.ID, d.Nombre, d.Tipo, d.SucursalID, d.IngenieroID)
 				}
 			}
 

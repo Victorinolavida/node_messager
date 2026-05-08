@@ -77,6 +77,7 @@ var migrations = []struct {
 			closed_at      TEXT
 		);
 	`},
+	{2, `ALTER TABLE DISPOSITIVOS ADD COLUMN ingeniero_id INTEGER DEFAULT 0;`},
 }
 
 func (d *DB) migrate() error {
@@ -191,16 +192,16 @@ func (d *DB) GetUsuarios() ([]Usuario, error) {
 
 // ── DISPOSITIVOS ──────────────────────────────────────────────────────────────
 
-func (d *DB) InsertDispositivo(id int, nombre, tipo string, sucursalID int) error {
+func (d *DB) InsertDispositivo(id int, nombre, tipo string, sucursalID, ingenieroID int) error {
 	_, err := d.sql.Exec(
-		`INSERT OR IGNORE INTO DISPOSITIVOS(id,nombre,tipo,sucursal_id) VALUES(?,?,?,?)`,
-		id, nombre, tipo, sucursalID,
+		`INSERT OR IGNORE INTO DISPOSITIVOS(id,nombre,tipo,sucursal_id,ingeniero_id) VALUES(?,?,?,?,?)`,
+		id, nombre, tipo, sucursalID, ingenieroID,
 	)
 	return err
 }
 
 func (d *DB) GetDispositivos() ([]Dispositivo, error) {
-	rows, err := d.sql.Query(`SELECT id,nombre,tipo,sucursal_id FROM DISPOSITIVOS`)
+	rows, err := d.sql.Query(`SELECT id,nombre,tipo,sucursal_id,COALESCE(ingeniero_id,0) FROM DISPOSITIVOS`)
 	if err != nil {
 		return nil, err
 	}
@@ -208,12 +209,18 @@ func (d *DB) GetDispositivos() ([]Dispositivo, error) {
 	var out []Dispositivo
 	for rows.Next() {
 		var r Dispositivo
-		if err := rows.Scan(&r.ID, &r.Nombre, &r.Tipo, &r.SucursalID); err != nil {
+		if err := rows.Scan(&r.ID, &r.Nombre, &r.Tipo, &r.SucursalID, &r.IngenieroID); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func (d *DB) CountDispositivosByIngeniero(ingenieroID int) (int, error) {
+	row := d.sql.QueryRow(`SELECT COUNT(*) FROM DISPOSITIVOS WHERE ingeniero_id=?`, ingenieroID)
+	var n int
+	return n, row.Scan(&n)
 }
 
 func (d *DB) CountDispositivos() (int, error) {
@@ -314,10 +321,11 @@ type Usuario struct {
 }
 
 type Dispositivo struct {
-	ID         int
-	Nombre     string
-	Tipo       string
-	SucursalID int
+	ID          int
+	Nombre      string
+	Tipo        string
+	SucursalID  int
+	IngenieroID int
 }
 
 type Ticket struct {

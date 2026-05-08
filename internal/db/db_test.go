@@ -26,25 +26,27 @@ func openTestDB(t *testing.T) *DB {
 
 // ── Migrations ────────────────────────────────────────────────────────────────
 
-func TestMigrate_SetsSchemaVersionTo1(t *testing.T) {
+func TestMigrate_SetsLatestSchemaVersion(t *testing.T) {
 	d := openTestDB(t)
 	v, err := d.Version()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v != 1 {
-		t.Fatalf("want version 1, got %d", v)
+	want := migrations[len(migrations)-1].version
+	if v != want {
+		t.Fatalf("want version %d, got %d", want, v)
 	}
 }
 
 func TestMigrate_Idempotent(t *testing.T) {
 	d := openTestDB(t)
+	before, _ := d.Version()
 	if err := d.migrate(); err != nil {
 		t.Fatalf("second migrate: %v", err)
 	}
-	v, _ := d.Version()
-	if v != 1 {
-		t.Fatalf("version changed after second migrate: %d", v)
+	after, _ := d.Version()
+	if after != before {
+		t.Fatalf("version changed after second migrate: %d → %d", before, after)
 	}
 }
 
@@ -165,7 +167,7 @@ func TestInsertUsuario_GetUsuarios_RoundTrip(t *testing.T) {
 
 func TestInsertDispositivo_GetDispositivos_RoundTrip(t *testing.T) {
 	d := openTestDB(t)
-	if err := d.InsertDispositivo(7, "Laptop-001", "Laptop", 3); err != nil {
+	if err := d.InsertDispositivo(7, "Laptop-001", "Laptop", 3, 42); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := d.GetDispositivos()
@@ -176,19 +178,34 @@ func TestInsertDispositivo_GetDispositivos_RoundTrip(t *testing.T) {
 		t.Fatalf("want 1, got %d", len(rows))
 	}
 	r := rows[0]
-	if r.ID != 7 || r.Nombre != "Laptop-001" || r.Tipo != "Laptop" || r.SucursalID != 3 {
+	if r.ID != 7 || r.Nombre != "Laptop-001" || r.Tipo != "Laptop" || r.SucursalID != 3 || r.IngenieroID != 42 {
 		t.Fatalf("unexpected: %+v", r)
 	}
 }
 
 func TestCountDispositivos(t *testing.T) {
 	d := openTestDB(t)
-	_ = d.InsertDispositivo(1, "A", "T", 1)
-	_ = d.InsertDispositivo(2, "B", "T", 1)
-	_ = d.InsertDispositivo(3, "C", "T", 1)
+	_ = d.InsertDispositivo(1, "A", "T", 1, 10)
+	_ = d.InsertDispositivo(2, "B", "T", 1, 10)
+	_ = d.InsertDispositivo(3, "C", "T", 1, 20)
 	n, _ := d.CountDispositivos()
 	if n != 3 {
 		t.Fatalf("want 3, got %d", n)
+	}
+}
+
+func TestCountDispositivosByIngeniero(t *testing.T) {
+	d := openTestDB(t)
+	_ = d.InsertDispositivo(1, "A", "T", 1, 10)
+	_ = d.InsertDispositivo(2, "B", "T", 1, 10)
+	_ = d.InsertDispositivo(3, "C", "T", 1, 20)
+	n, _ := d.CountDispositivosByIngeniero(10)
+	if n != 2 {
+		t.Fatalf("want 2 for engineer 10, got %d", n)
+	}
+	n, _ = d.CountDispositivosByIngeniero(20)
+	if n != 1 {
+		t.Fatalf("want 1 for engineer 20, got %d", n)
 	}
 }
 

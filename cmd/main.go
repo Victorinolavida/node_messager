@@ -199,7 +199,7 @@ func buildCommitHandler(self node.Node, nodeDB *db.DB, log *zap.SugaredLogger) f
 			if r.SucursalID != self.ID {
 				return nil
 			}
-			return nodeDB.InsertDispositivo(r.ID, r.Nombre, r.Tipo, r.SucursalID)
+			return nodeDB.InsertDispositivo(r.ID, r.Nombre, r.Tipo, r.SucursalID, r.IngenieroID)
 
 		case "INSERT_TICKET", "REASSIGN_TICKET":
 			var r dto.TicketRow

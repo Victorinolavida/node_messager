@@ -79,10 +79,11 @@ type UsuarioRow struct {
 }
 
 type DispositivoRow struct {
-	ID         int    `json:"id"`
-	Nombre     string `json:"nombre"`
-	Tipo       string `json:"tipo"`
-	SucursalID int    `json:"sucursal_id"`
+	ID          int    `json:"id"`
+	Nombre      string `json:"nombre"`
+	Tipo        string `json:"tipo"`
+	SucursalID  int    `json:"sucursal_id"`
+	IngenieroID int    `json:"ingeniero_id"`
 }
 
 type AddDevicePayload struct {

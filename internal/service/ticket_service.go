@@ -106,37 +106,57 @@ func (s *TicketService) AddDevice(ctx context.Context, nombre, tipo string) erro
 }
 
 func (s *TicketService) distributeDevice(ctx context.Context, nombre, tipo string) error {
-	// find node with fewest devices
-	counts, err := s.queryDeviceCounts(ctx)
+	// query all engineers across all nodes
+	engRows, err := s.ListAll(ctx, "INGENIEROS")
 	if err != nil {
-		return fmt.Errorf("query device counts: %w", err)
+		return fmt.Errorf("query engineers: %w", err)
 	}
-	targetID := s.self.ID
-	minCount := counts[s.self.ID]
-	for _, n := range s.state.All() {
-		if c, ok := counts[n.ID]; !ok || c < minCount {
-			minCount = c
-			targetID = n.ID
-		}
+	if len(engRows) == 0 {
+		return fmt.Errorf("no engineers available to assign device")
 	}
-	id := newID(targetID)
-	row := dto.DispositivoRow{ID: id, Nombre: nombre, Tipo: tipo, SucursalID: targetID}
-	data, _ := json.Marshal(row)
-	return s.consensus.Propose(ctx, "INSERT_DISPOSITIVO", string(data))
-}
 
-func (s *TicketService) queryDeviceCounts(ctx context.Context) (map[int]int, error) {
-	rows, err := s.ListAll(ctx, "DISPOSITIVOS")
+	// count devices per engineer across all nodes
+	devRows, err := s.ListAll(ctx, "DISPOSITIVOS")
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("query devices: %w", err)
 	}
 	counts := make(map[int]int)
-	for _, r := range rows {
-		if dev, ok := r.(dto.DispositivoRow); ok {
-			counts[dev.SucursalID]++
+	for _, r := range devRows {
+		if dev, ok := r.(dto.DispositivoRow); ok && dev.IngenieroID != 0 {
+			counts[dev.IngenieroID]++
 		}
 	}
-	return counts, nil
+
+	// pick engineer with fewest devices
+	var chosen *dto.IngenieroRow
+	minCount := -1
+	for _, r := range engRows {
+		if eng, ok := r.(dto.IngenieroRow); ok {
+			c := counts[eng.ID]
+			if minCount < 0 || c < minCount {
+				minCount = c
+				cp := eng
+				chosen = &cp
+			}
+		}
+	}
+	if chosen == nil {
+		return fmt.Errorf("no engineer selected")
+	}
+
+	// device lives on the same sucursal as the engineer
+	id := newID(chosen.SucursalID)
+	row := dto.DispositivoRow{
+		ID:          id,
+		Nombre:      nombre,
+		Tipo:        tipo,
+		SucursalID:  chosen.SucursalID,
+		IngenieroID: chosen.ID,
+	}
+	data, _ := json.Marshal(row)
+	s.log.Infof("[service] assigning device %q to engineer %d (sucursal %d, current_devices=%d)",
+		nombre, chosen.ID, chosen.SucursalID, minCount)
+	return s.consensus.Propose(ctx, "INSERT_DISPOSITIVO", string(data))
 }
 
 // ── Ticket operations ─────────────────────────────────────────────────────────
@@ -427,7 +447,7 @@ func (s *TicketService) localRows(table string) ([]any, error) {
 		}
 		var out []any
 		for _, r := range rows {
-			out = append(out, dto.DispositivoRow{ID: r.ID, Nombre: r.Nombre, Tipo: r.Tipo, SucursalID: r.SucursalID})
+			out = append(out, dto.DispositivoRow{ID: r.ID, Nombre: r.Nombre, Tipo: r.Tipo, SucursalID: r.SucursalID, IngenieroID: r.IngenieroID})
 		}
 		return out, nil
 	case "TICKETS":
@@ -477,7 +497,7 @@ func unmarshalRows(table string, raw json.RawMessage) ([]any, error) {
 		}
 		out := make([]any, len(rows))
 		for i, r := range rows {
-			out[i] = r
+			out[i] = r // IngenieroID included via JSON tag
 		}
 		return out, nil
 	case "TICKETS":
