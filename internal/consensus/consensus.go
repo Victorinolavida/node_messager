@@ -17,6 +17,11 @@ import (
 
 const voteTimeout = 3 * time.Second
 
+const (
+	proposeMaxRetries = 3
+	proposeRetryDelay = 1 * time.Second
+)
+
 type round struct {
 	roundID   string
 	operation string
@@ -57,8 +62,30 @@ func New(self node.Node, state *nodestate.State, pool *sender.Pool, log *zap.Sug
 }
 
 // Propose broadcasts a PROPOSE to all alive peers, waits for quorum, then broadcasts COMMIT.
-// Returns error if quorum not reached or commit fails locally.
+// Retries up to proposeMaxRetries times on transient failure.
 func (e *Engine) Propose(ctx context.Context, operation, data string) error {
+	var lastErr error
+	for attempt := 1; attempt <= proposeMaxRetries; attempt++ {
+		lastErr = e.propose(ctx, operation, data)
+		if lastErr == nil {
+			return nil
+		}
+		e.log.Warnf("[consensus] Propose op=%s attempt=%d/%d failed: %v",
+			operation, attempt, proposeMaxRetries, lastErr)
+		if attempt < proposeMaxRetries {
+			select {
+			case <-time.After(proposeRetryDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	e.log.Errorf("[consensus] Propose op=%s failed after %d attempts: %v",
+		operation, proposeMaxRetries, lastErr)
+	return lastErr
+}
+
+func (e *Engine) propose(ctx context.Context, operation, data string) error {
 	peers := e.state.AlivePeers()
 	needed := (len(peers)+1)/2 + 1 // majority of all nodes including self
 	if needed < 1 {

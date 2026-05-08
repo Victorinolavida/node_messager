@@ -161,7 +161,35 @@ func (s *TicketService) distributeDevice(ctx context.Context, nombre, tipo strin
 
 // ── Ticket operations ─────────────────────────────────────────────────────────
 
+const (
+	raiseMaxRetries = 3
+	raiseRetryDelay = 2 * time.Second
+)
+
+// RaiseTicket opens a new ticket with mutual exclusion + consensus. Retries on failure.
 func (s *TicketService) RaiseTicket(ctx context.Context, idUsuario, idDispositivo int) error {
+	var lastErr error
+	for attempt := 1; attempt <= raiseMaxRetries; attempt++ {
+		lastErr = s.raiseTicket(ctx, idUsuario, idDispositivo)
+		if lastErr == nil {
+			return nil
+		}
+		s.log.Warnf("[service] RaiseTicket attempt=%d/%d failed: %v",
+			attempt, raiseMaxRetries, lastErr)
+		if attempt < raiseMaxRetries {
+			select {
+			case <-time.After(raiseRetryDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	s.log.Errorf("[service] RaiseTicket failed after %d attempts: %v",
+		raiseMaxRetries, lastErr)
+	return lastErr
+}
+
+func (s *TicketService) raiseTicket(ctx context.Context, idUsuario, idDispositivo int) error {
 	release, err := s.mutex.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire lock: %w", err)

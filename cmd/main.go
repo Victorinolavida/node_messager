@@ -46,21 +46,14 @@ func main() {
 
 	debugMode := debug == "true"
 
-	// allNodes = sucursales + master node (for routing)
-	allNodes := cfg.AllNodes()
-
-	// serveNodes = nodes whose TCP server runs locally
-	// In VM mode: only the host node. In dev mode: all nodes.
-	var serveNodes []node.Node
+	// In VM mode only the host node runs locally; in dev mode all sucursales run.
+	serveNodes := cfg.Nodes
 	if cfg.HostNode != nil {
 		serveNodes = []node.Node{*cfg.HostNode}
-	} else {
-		serveNodes = allNodes
 	}
 
-	// msgstore per served node
-	stores := make(map[int]*msgstore.Store, len(serveNodes))
-	for _, n := range serveNodes {
+	stores := make(map[int]*msgstore.Store, len(cfg.Nodes))
+	for _, n := range cfg.Nodes {
 		isLocal := cfg.HostNode == nil || n.ID == cfg.HostNode.ID
 		if isLocal {
 			store, err := msgstore.NewWithFile(50, fmt.Sprintf("messages/%s.jsonl", n.Name))
@@ -89,7 +82,6 @@ func main() {
 		nodeLogs[n.ID] = nodeLog
 		nodeCtx := logger.SetContextLogger(context.Background(), nodeLog)
 
-		// open per-node SQLite DB — runs migrations automatically
 		nodeDB, err := db.Open(n.Name)
 		if err != nil {
 			startupLog.Fatalf("[%s] open db: %v", n.Name, err)
@@ -98,7 +90,7 @@ func main() {
 			startupLog.Infof("[%s] db schema version: %d", n.Name, v)
 		}
 
-		ns := nodestate.New(n, allNodes, cfg.MasterID)
+		ns := nodestate.New(n, cfg.Nodes, cfg.MasterID)
 		pool := sender.NewPool(nodeLog)
 		commitHandler := buildCommitHandler(n, nodeDB, nodeLog)
 
@@ -116,10 +108,8 @@ func main() {
 
 		disp := dispatcher.New(nodeCtx, ns, consEngine, mtxEngine, elecEngine, hbMonitor, svc, nodeLog)
 
-		// if this node is the original master (ID==cfg.MasterID from dedicated master block),
-		// claim mastership after a brief delay to allow connections to establish
-		isMaster := cfg.MasterNode != nil && n.ID == cfg.MasterNode.ID
-		if isMaster {
+		// initial master sucursal announces itself on startup
+		if n.ID == cfg.MasterID {
 			go func(e *election.Engine) {
 				time.Sleep(2 * time.Second)
 				e.ClaimMastership()
@@ -140,34 +130,22 @@ func main() {
 	}
 	wg.Wait()
 
-	// CLI only uses a sucursal node (never the master node directly)
-	// In host mode: use the host. In dev mode: use first sucursal (not the master).
+	// CLI uses the host sucursal in VM mode, or first sucursal in dev mode.
 	var cliSvc *service.TicketService
 	var cliHostNode *node.Node
 
 	if cfg.HostNode != nil {
-		// VM mode: host is whatever node is local
-		// Only show in CLI if it's a sucursal (not the master)
-		if cfg.MasterNode == nil || cfg.HostNode.ID != cfg.MasterNode.ID {
-			cliSvc = nodeServices[cfg.HostNode.ID]
-			cliHostNode = cfg.HostNode
-		}
-	} else {
-		// Dev mode: pick first sucursal (cfg.Nodes, excludes master)
-		if len(cfg.Nodes) > 0 {
-			first := cfg.Nodes[0]
-			cliSvc = nodeServices[first.ID]
-			// no hostNode in dev mode — CLI can pick from all sucursales
-		}
+		cliSvc = nodeServices[cfg.HostNode.ID]
+		cliHostNode = cfg.HostNode
+	} else if len(cfg.Nodes) > 0 {
+		cliSvc = nodeServices[cfg.Nodes[0].ID]
 	}
 
-	// CLI receives only sucursales (cfg.Nodes), master is hidden
 	if err := cli.Run(cfg.Nodes, stores, cliHostNode, cliSvc, startupLog, nodeLogs); err != nil {
 		startupLog.Fatalf("cli error: %v", err)
 	}
 }
 
-// buildCommitHandler returns a closure that applies consensus-committed operations to the local DB.
 func buildCommitHandler(self node.Node, nodeDB *db.DB, log *zap.SugaredLogger) func(operation, data string) error {
 	return func(operation, data string) error {
 		switch operation {

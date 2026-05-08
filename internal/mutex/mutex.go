@@ -17,6 +17,11 @@ import (
 
 var lockTimeout = 5 * time.Second // var so tests can override
 
+const (
+	acquireMaxRetries = 3
+	acquireRetryDelay = 1 * time.Second
+)
+
 type pendingReq struct {
 	requestID string
 	fromNode  string
@@ -44,8 +49,33 @@ func New(self node.Node, state *nodestate.State, pool *sender.Pool, log *zap.Sug
 	}
 }
 
-// Acquire blocks until the distributed lock is held. Returns a release function.
+// Acquire blocks until the distributed lock is held. Retries on transient failure.
 func (e *Engine) Acquire(ctx context.Context) (func(), error) {
+	var (
+		release func()
+		lastErr error
+	)
+	for attempt := 1; attempt <= acquireMaxRetries; attempt++ {
+		release, lastErr = e.acquire(ctx)
+		if lastErr == nil {
+			return release, nil
+		}
+		e.log.Warnf("[mutex] Acquire attempt=%d/%d failed: %v",
+			attempt, acquireMaxRetries, lastErr)
+		if attempt < acquireMaxRetries {
+			select {
+			case <-time.After(acquireRetryDelay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+	e.log.Errorf("[mutex] Acquire failed after %d attempts: %v",
+		acquireMaxRetries, lastErr)
+	return nil, lastErr
+}
+
+func (e *Engine) acquire(ctx context.Context) (func(), error) {
 	if e.state.IsMaster() {
 		return e.acquireLocal()
 	}
