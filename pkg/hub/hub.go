@@ -67,8 +67,10 @@ func (h *Hub) Run() {
 				h.log.Warnf("[%s] invalid message payload: %v", h.name, err)
 				continue
 			}
-			if err := h.store.Save(msg, msgstore.Received); err != nil {
-				h.log.Warnf("[%s] store save: %v", h.name, err)
+			if h.store != nil {
+				if err := h.store.Save(msg, msgstore.Received); err != nil {
+					h.log.Warnf("[%s] store save: %v", h.name, err)
+				}
 			}
 			h.log.Infof("[%s] recv  type=%s from=%s to=%s id=%s — %q",
 				h.name, msg.Type, msg.FromNode, msg.ToNode, msg.ID, msg.Content)

@@ -52,7 +52,7 @@ func main() {
 		serveNodes = []node.Node{*cfg.HostNode}
 	}
 
-	stores := make(map[int]*msgstore.Store, len(cfg.Nodes))
+	stores := make(map[int]*msgstore.Store, len(cfg.Nodes)+1)
 	for _, n := range cfg.Nodes {
 		isLocal := cfg.HostNode == nil || n.ID == cfg.HostNode.ID
 		if isLocal {
@@ -63,6 +63,17 @@ func main() {
 			stores[n.ID] = store
 		} else {
 			stores[n.ID] = msgstore.New(50)
+		}
+	}
+	// guarantee host node always has a store (guards against host.id not matching any node)
+	if cfg.HostNode != nil {
+		if _, ok := stores[cfg.HostNode.ID]; !ok {
+			store, err := msgstore.NewWithFile(50, fmt.Sprintf("messages/%s.jsonl", cfg.HostNode.Name))
+			if err != nil {
+				startupLog.Fatalf("[%s] open message file: %v", cfg.HostNode.Name, err)
+			}
+			stores[cfg.HostNode.ID] = store
+			startupLog.Warnf("host node id=%d not found in nodes list — created store anyway", cfg.HostNode.ID)
 		}
 	}
 

@@ -39,13 +39,13 @@ generate_config() {
   cat > "$out" <<EOF
 {
   "master_id": ${MASTER_ID},
+  "host_id": ${vm_id},
   "nodes": [
     { "id": 1, "name": "sucursal1", "host": "${IP1}", "port": ${PORT} },
     { "id": 2, "name": "sucursal2", "host": "${IP2}", "port": ${PORT} },
     { "id": 3, "name": "sucursal3", "host": "${IP3}", "port": ${PORT} },
     { "id": 4, "name": "sucursal4", "host": "${IP4}", "port": ${PORT} }
-  ],
-  "host": { "id": ${vm_id}, "name": "${host_name}", "host": "0.0.0.0", "port": ${PORT} }
+  ]
 }
 EOF
   echo "  ✓ generado: $out"
