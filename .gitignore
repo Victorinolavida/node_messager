@@ -4,6 +4,5 @@ CLAUDE.md
 data/
 tickets/
 nodes-vm*.json
-node_messager
 node_messager_linux_amd64
-node_messager_linux_arm64
+PENDIENTES.md

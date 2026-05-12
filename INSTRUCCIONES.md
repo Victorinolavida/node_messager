@@ -63,7 +63,8 @@ Todos los nodos corren en el mismo proceso. No se necesita `host_id`.
   "nodes": [
     { "id": 1, "name": "sucursal1", "host": "localhost", "port": 5001 },
     { "id": 2, "name": "sucursal2", "host": "localhost", "port": 5002 },
-    { "id": 3, "name": "sucursal3", "host": "localhost", "port": 5003 }
+    { "id": 3, "name": "sucursal3", "host": "localhost", "port": 5003 },
+    { "id": 4, "name": "sucursal4", "host": "localhost", "port": 5004 }
   ]
 }
 ```
@@ -80,7 +81,8 @@ El array `nodes` es **idéntico en todas las VMs**. Solo cambia `host_id` según
   "nodes": [
     { "id": 1, "name": "sucursal1", "host": "192.168.100.102", "port": 5001 },
     { "id": 2, "name": "sucursal2", "host": "192.168.100.103", "port": 5001 },
-    { "id": 3, "name": "sucursal3", "host": "192.168.100.104", "port": 5001 }
+    { "id": 3, "name": "sucursal3", "host": "192.168.100.104", "port": 5001 },
+    { "id": 4, "name": "sucursal4", "host": "192.168.100.105", "port": 5001 }
   ]
 }
 ```
@@ -88,6 +90,8 @@ El array `nodes` es **idéntico en todas las VMs**. Solo cambia `host_id` según
 **VM 2 — sucursal2:** igual que arriba pero `"host_id": 2`
 
 **VM 3 — sucursal3:** igual que arriba pero `"host_id": 3`
+
+**VM 4 — sucursal4:** igual que arriba pero `"host_id": 4`
 
 ---
 
@@ -105,6 +109,7 @@ Al iniciar se verifica el esquema de la base de datos:
 [sucursal1] db schema version: 2
 [sucursal2] db schema version: 2
 [sucursal3] db schema version: 2
+[sucursal4] db schema version: 2
 ```
 
 ---
@@ -130,16 +135,25 @@ make build-linux
 # genera: node_messager_linux_amd64
 ```
 
-**Paso 2 — Copiar binario a cada VM:**
+**Paso 2 — Habilitar NTP en cada VM (sincronización de relojes):**
+```bash
+# ejecutar en cada VM antes de desplegar
+sudo timedatectl set-ntp true
+# verificar:
+timedatectl status   # debe mostrar "NTP service: active"
+```
+
+**Paso 3 — Copiar binario a cada VM:**
 ```bash
 scp node_messager_linux_amd64 victor@192.168.100.102:~/node_messager/
 scp node_messager_linux_amd64 victor@192.168.100.103:~/node_messager/
 scp node_messager_linux_amd64 victor@192.168.100.104:~/node_messager/
+scp node_messager_linux_amd64 victor@192.168.100.105:~/node_messager/
 ```
 
-**Paso 3 — Crear nodes.json en cada VM** (ver formato arriba, solo cambia `host_id`)
+**Paso 4 — Crear nodes.json en cada VM** (ver formato arriba, solo cambia `host_id`)
 
-**Paso 4 — Ejecutar (iniciar VM1 primero):**
+**Paso 5 — Ejecutar (iniciar VM1 primero):**
 ```bash
 mkdir -p data logs messages tickets
 ./node_messager_linux_amd64
@@ -247,13 +261,9 @@ Todos estos directorios son creados automáticamente y están en `.gitignore`.
 
 ---
 
-## Agregar un cuarto nodo
+## Estructura de nodos
 
-Agregar al array `nodes` en el `nodes.json` de **todas** las VMs:
-```json
-{ "id": 4, "name": "sucursal4", "host": "192.168.100.105", "port": 5001 }
-```
-En la nueva VM usar `"host_id": 4`. No se necesita recompilar.
+El sistema opera con **4 sucursales**. El array `nodes` es idéntico en todas las VMs; solo cambia `host_id`. Para cambiar IPs, editar `nodes.json` en cada VM. No se necesita recompilar.
 
 ---
 

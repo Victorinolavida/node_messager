@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
 	"node_messager/internal/consensus"
 	"node_messager/internal/db"
 	"node_messager/internal/mutex"
@@ -17,17 +16,20 @@ import (
 	"node_messager/pkg/dto"
 	"node_messager/pkg/node"
 	"node_messager/pkg/sender"
+
+	"go.uber.org/zap"
 )
 
 const queryTimeout = 3 * time.Second
 
-// idCounter is an atomic sequence for ID generation.
-// IDs are nodeID * 10_000_000_000 + counter, guaranteeing cross-node uniqueness.
+// idCounter es una secuencia para generar un ID
+// para un usuario el ID se genera con  NodeID * 10_000_000_000 + counter, esto para generar id unicos en cada nodo
+// esto nos ganrantiza que no exista dos usuarios en dos nodos con el mismo ID
+// NOTA: esto esta ganrantizo solo para un pequeño numero de IDs, esta solucion
+// No escala correctamente para sistemas grandes
 var idCounter int64
 
-// newID returns a collision-free int ID for this node.
-// Format: nodeID * 10_000_000_000 + sequential counter
-// e.g. node 2, 5th record → 20_000_000_005
+// newID regresa el ID para que no haga colicion en los demas nodos
 func newID(nodeID int) int {
 	n := atomic.AddInt64(&idCounter, 1)
 	return nodeID*10_000_000_000 + int(n)
@@ -42,7 +44,7 @@ type TicketService struct {
 	mutex     *mutex.Engine
 	log       *zap.SugaredLogger
 
-	// pending cross-node query results
+	// queryMu nos ayuda a hacer un lock en memoria
 	queryMu   sync.Mutex
 	queryWait map[string]*queryCollector
 }
@@ -75,8 +77,7 @@ func New(
 	}
 }
 
-// ── Add operations ─────────────────────────────────────────────────────────────
-
+// AddUsuario añade un usuario a la base de datos del nodo actual
 func (s *TicketService) AddUsuario(ctx context.Context, nombre string) error {
 	id := newID(s.self.ID)
 	row := dto.UsuarioRow{ID: id, Nombre: nombre, SucursalID: s.self.ID}
@@ -84,6 +85,8 @@ func (s *TicketService) AddUsuario(ctx context.Context, nombre string) error {
 	return s.consensus.Propose(ctx, "INSERT_USUARIO", string(data))
 }
 
+// AddIngeniero añade un ingeniero a la base de datos del nodo actual
+// ademas de ponerlo en estado "disponible"
 func (s *TicketService) AddIngeniero(ctx context.Context, nombre string) error {
 	id := newID(s.self.ID)
 	row := dto.IngenieroRow{ID: id, Nombre: nombre, SucursalID: s.self.ID, Disponible: 1}

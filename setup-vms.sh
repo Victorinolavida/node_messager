@@ -86,6 +86,16 @@ deploy() {
   echo ""
   echo "--- Desplegando a VM${vm_id} ($ip) ---"
 
+  # sincronización de tiempo via NTP (chrony)
+  ssh "$target" "
+    if command -v chronyc &>/dev/null; then
+      sudo systemctl enable --now chrony 2>/dev/null || sudo systemctl enable --now chronyd 2>/dev/null || true
+    elif command -v timedatectl &>/dev/null; then
+      sudo timedatectl set-ntp true
+    fi
+  "
+  echo "  ✓ NTP habilitado"
+
   # crear directorio remoto
   ssh "$target" "mkdir -p ${REMOTE_DIR}/data ${REMOTE_DIR}/logs ${REMOTE_DIR}/messages ${REMOTE_DIR}/tickets"
 

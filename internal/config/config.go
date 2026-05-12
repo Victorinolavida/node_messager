@@ -11,11 +11,12 @@ import (
 )
 
 type Config struct {
-	Nodes    []node.Node // all sucursales
-	HostNode *node.Node  // which node runs locally (nil = dev mode, all nodes local)
-	MasterID int         // ID of the sucursal that starts as master
+	Nodes    []node.Node // todas las sucursales
+	HostNode *node.Node  // esto es el nodo actual, para evitar llamarse a si mismo
+	MasterID int         // esto es el ID del nodo maestro
 }
 
+// LoadConfig carga el archivo nodes.json para cargar la informacion de todos los nodos
 func LoadConfig(path string) (Config, error) {
 	k := koanf.New(".")
 	if err := k.Load(file.Provider(path), kjson.Parser()); err != nil {
@@ -25,15 +26,15 @@ func LoadConfig(path string) (Config, error) {
 	if err := k.Unmarshal("nodes", &cfg.Nodes); err != nil {
 		return Config{}, err
 	}
-
-	// master_id: which sucursal is initial master
+	//  revisamos si en el archivo exist master_id
+	// si no existe ponemos el primer nodo como el nodo maestro
+	// en caso de no tener explicitamente un master_id
 	cfg.MasterID = k.Int("master_id")
 	if cfg.MasterID == 0 && len(cfg.Nodes) > 0 {
 		cfg.MasterID = cfg.Nodes[0].ID
 	}
 
-	// host_id: which sucursal runs locally (VM mode).
-	// Looked up from the nodes array — eliminates duplication bugs.
+	// buscamos cual es el host_id del nodo host, si no existe lanzamos un error
 	if k.Exists("host_id") {
 		hostID := k.Int("host_id")
 		n := nodeByID(cfg.Nodes, hostID)
@@ -41,23 +42,11 @@ func LoadConfig(path string) (Config, error) {
 			return Config{}, fmt.Errorf("host_id %d not found in nodes list", hostID)
 		}
 		cfg.HostNode = n
-	} else if k.Exists("host") {
-		// legacy fallback: full host object still supported
-		var h node.Node
-		if err := k.Unmarshal("host", &h); err != nil {
-			return Config{}, err
-		}
-		// prefer matching node from nodes array to avoid data mismatch
-		if n := nodeByID(cfg.Nodes, h.ID); n != nil {
-			cfg.HostNode = n
-		} else {
-			cfg.HostNode = &h
-		}
 	}
-
 	return cfg, nil
 }
 
+// busca el nodo con el id dado, regresa null si no encontro nada
 func nodeByID(nodes []node.Node, id int) *node.Node {
 	for i := range nodes {
 		if nodes[i].ID == id {

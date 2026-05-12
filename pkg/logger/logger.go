@@ -3,9 +3,7 @@ package logger
 import (
 	"context"
 	"io"
-	"log"
 	"os"
-	"sync"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -13,11 +11,7 @@ import (
 
 type loggerKey string
 
-var (
-	globalLogger     *zap.SugaredLogger
-	once             sync.Once
-	loggerContextKey loggerKey = loggerKey("ctx_logger")
-)
+const loggerContextKey loggerKey = "ctx_logger"
 
 func newEncoderConfig() zapcore.EncoderConfig {
 	return zapcore.EncoderConfig{
@@ -67,56 +61,6 @@ func NewLoggerToWriter(w io.Writer, debugMode bool) *zap.SugaredLogger {
 		logLevel,
 	)
 	return zap.New(core, zap.AddCaller()).Sugar()
-}
-
-// NewLoggerForNode fans out to tuiWriter (ANSI colors) and fileWriter (plain text).
-func NewLoggerForNode(tuiWriter, fileWriter io.Writer, debugMode bool) *zap.SugaredLogger {
-	logLevel := zapcore.InfoLevel
-	if debugMode {
-		logLevel = zapcore.DebugLevel
-	}
-
-	tuiCfg := newEncoderConfig()
-	tuiCfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
-	tuiCore := zapcore.NewCore(
-		zapcore.NewConsoleEncoder(tuiCfg),
-		zapcore.AddSync(tuiWriter),
-		logLevel,
-	)
-
-	fileCfg := newEncoderConfig()
-	fileCfg.EncodeLevel = zapcore.CapitalLevelEncoder
-	fileCore := zapcore.NewCore(
-		zapcore.NewConsoleEncoder(fileCfg),
-		zapcore.AddSync(fileWriter),
-		logLevel,
-	)
-
-	return zap.New(zapcore.NewTee(tuiCore, fileCore), zap.AddCaller()).Sugar()
-}
-
-func GetGlobalLogger(params ...bool) *zap.SugaredLogger {
-	once.Do(func() {
-		var log *zap.SugaredLogger
-		if len(params) == 0 {
-			log = newLogger(true, true)
-		} else if len(params) == 1 {
-			log = newLogger(params[0], params[0])
-		} else {
-			log = newLogger(params[0], params[1])
-		}
-		globalLogger = log
-	})
-	return globalLogger
-}
-
-func CloseLogger() {
-	if globalLogger != nil {
-		err := globalLogger.Sync()
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
 }
 
 func GetContextLogger(ctx context.Context) *zap.SugaredLogger {
