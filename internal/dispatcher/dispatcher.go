@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"go.uber.org/zap"
 	"node_messager/internal/consensus"
 	"node_messager/internal/election"
 	"node_messager/internal/heartbeat"
@@ -12,20 +11,33 @@ import (
 	"node_messager/internal/nodestate"
 	"node_messager/internal/service"
 	"node_messager/pkg/dto"
+
+	"go.uber.org/zap"
 )
 
-// NodeDispatcher implements hub.Dispatcher and routes each message type.
+// NodeDispatcher es una estructura que nos ayuda a controlar que accions se lleva a cabo
+// y por quien, por lo que recibe un mensaje(accion) y dependiendo de que mensaje(accion)
+// recibe , este llama un handler correcto.
 type NodeDispatcher struct {
-	state     *nodestate.State
+	// nos ayuda a conocer el estado del nodo
+	state *nodestate.State
+	// garantiza que una escritura sea aceptada por la mayoria de nodos antes de ejecutarse
 	consensus *consensus.Engine
-	mutex     *mutex.Engine
-	election  *election.Engine
+	// exclusion mutua distribuida entre nodos — evita que dos sucursales
+	// asignen el mismo ingeniero a dos tickets al mismo tiempo
+	mutex *mutex.Engine
+	// nos ayuda a elegir un nuevo nodo maestro cuando el actual falla
+	election *election.Engine
+	// nos ayuda a constantemente saber el estado de salud de los nodos
+	// en particular si el nodo maestro esta arriba
 	heartbeat *heartbeat.Monitor
-	svc       *service.TicketService
-	log       *zap.SugaredLogger
-	ctx       context.Context
+	// servicio de tickets, nos ayuda a crear, actualizar o buscar tickets
+	svc *service.TicketService
+	log *zap.SugaredLogger
+	ctx context.Context
 }
 
+// New crea un nuevo NodeDispatcher con todos los engines necesarios para manejar los mensajes
 func New(
 	ctx context.Context,
 	state *nodestate.State,
@@ -48,16 +60,15 @@ func New(
 	}
 }
 
-// Dispatch is called by hub.Run() in a goroutine for every received message.
+// Dispatch recibe cada mensaje TCP que llega al nodo y lo envia al handler correcto
+// segun el tipo de mensaje — es el unico punto de entrada para todos los mensajes distribuidos
 func (d *NodeDispatcher) Dispatch(msg dto.Message) {
 	switch msg.Type {
-	// ── Heartbeat ──────────────────────────────────────────────────────────
 	case dto.TypePing:
 		d.heartbeat.HandlePing(msg)
 	case dto.TypePong:
 		d.heartbeat.HandlePong(msg)
 
-	// ── Consensus ──────────────────────────────────────────────────────────
 	case dto.TypePropose:
 		d.consensus.HandlePropose(msg)
 	case dto.TypeVoteYes, dto.TypeVoteNo:
@@ -65,7 +76,6 @@ func (d *NodeDispatcher) Dispatch(msg dto.Message) {
 	case dto.TypeCommit:
 		d.consensus.HandleCommit(msg)
 
-	// ── Mutual exclusion ───────────────────────────────────────────────────
 	case dto.TypeLockRequest:
 		d.mutex.HandleLockRequest(msg)
 	case dto.TypeLockGrant:
@@ -75,7 +85,6 @@ func (d *NodeDispatcher) Dispatch(msg dto.Message) {
 	case dto.TypeLockRelease:
 		d.mutex.HandleLockRelease(msg)
 
-	// ── Leader election ────────────────────────────────────────────────────
 	case dto.TypeElection:
 		d.election.HandleElection(msg)
 	case dto.TypeElectionOK:
@@ -83,17 +92,14 @@ func (d *NodeDispatcher) Dispatch(msg dto.Message) {
 	case dto.TypeCoordinator:
 		d.election.HandleCoordinator(msg)
 
-	// ── Data queries ───────────────────────────────────────────────────────
 	case dto.TypeQuery:
 		d.svc.HandleQuery(msg)
 	case dto.TypeQueryResponse:
 		d.svc.HandleQueryResponse(msg)
 
-	// ── Device distribution ────────────────────────────────────────────────
 	case dto.TypeAddDevice:
 		go d.svc.HandleAddDevice(d.ctx, msg)
 
-	// ── Node failure ───────────────────────────────────────────────────────
 	case dto.TypeNodeDead:
 		if d.state.IsMaster() {
 			var p dto.NodeDeadPayload
@@ -102,9 +108,7 @@ func (d *NodeDispatcher) Dispatch(msg dto.Message) {
 			}
 		}
 
-	// TypeMsg, TypeBroadcast, TypeRedistribute, TypeAssignTicket, TypeCloseTicket
-	// pass through — handled by hub fan-out or CLI
 	default:
-		// no application handler needed
+		// si no es ningun tipo de mensaje de arriba, ignoramos este mensaje
 	}
 }
