@@ -120,11 +120,11 @@ Al iniciar se verifica el esquema de la base de datos:
 
 ```bash
 # Solo generar configs (sin SSH)
-./setup-vms.sh 192.168.100.102 192.168.100.103 192.168.100.104 192.168.100.105 --only-configs
+./setup.sh 192.168.100.102 192.168.100.103 192.168.100.104 192.168.100.105 --only-configs
 # genera: nodes-vm1.json, nodes-vm2.json, nodes-vm3.json, nodes-vm4.json
 
 # Compilar + generar configs + desplegar por SSH
-./setup-vms.sh 192.168.100.102 192.168.100.103 192.168.100.104 192.168.100.105 victor
+./setup.sh 192.168.100.102 192.168.100.103 192.168.100.104 192.168.100.105 victor
 ```
 
 ### Opción B — Manual

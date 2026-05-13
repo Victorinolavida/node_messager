@@ -63,10 +63,10 @@ cp nodes-ejemplo.json nodes.json && go run ./cmd
 ## Despliegue rápido con script
 
 ```bash
-./setup-vms.sh <IP1> <IP2> <IP3> <IP4> [usuario_ssh]
+./setup.sh <IP1> <IP2> <IP3> <IP4> [usuario_ssh]
 
 # solo generar configs (sin desplegar)
-./setup-vms.sh 192.168.100.10 192.168.100.11 192.168.100.12 192.168.100.13 --only-configs
+./setup.sh 192.168.100.10 192.168.100.11 192.168.100.12 192.168.100.13 --only-configs
 ```
 
 ## Archivos en runtime

@@ -5,5 +5,6 @@ data/
 tickets/
 nodes-vm*.json
 nodes.json
+setup-vm*.sh
 node_messager_linux_amd64
 PENDIENTES.md
