@@ -38,10 +38,10 @@ echo "  ✓ directorios listos"
 
 echo ""
 echo "=== Creando nodes.json ==="
-cat > ~/node_messager/nodes.json << 'EOF'
+cat > ~/node_messager/nodes.json << EOF
 {
   "master_id": 1,
-  "host_id": HOST_ID_PLACEHOLDER,
+  "host_id": ${HOST_ID},
   "nodes": [
     { "id": 1, "name": "sucursal1", "host": "192.168.100.102", "port": 5001 },
     { "id": 2, "name": "sucursal2", "host": "192.168.100.103", "port": 5001 },
@@ -50,11 +50,7 @@ cat > ~/node_messager/nodes.json << 'EOF'
   ]
 }
 EOF
-
-# reemplaza el placeholder con el host_id real
-sed -i "s/HOST_ID_PLACEHOLDER/${HOST_ID}/" ~/node_messager/nodes.json
 echo "  ✓ nodes.json creado con host_id=${HOST_ID}"
-echo "  ⚠ Edita las IPs en ~/node_messager/nodes.json si es necesario"
 
 # ── listo ─────────────────────────────────────────────────────────────────────
 
