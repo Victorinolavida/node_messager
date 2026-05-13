@@ -17,6 +17,11 @@ func Open(name string) (*DB, error) {
 	return openAt(fmt.Sprintf("data/%s.db", name))
 }
 
+// OpenAt abre la conexion a la base de datos en una ruta especifica
+func OpenAt(path string) (*DB, error) {
+	return openAt(path)
+}
+
 func openAt(path string) (*DB, error) {
 	// aqui usamos sqlite por simplicidad, ya que sqlite no require
 	// configuracion adiciona a cada vm/nodo

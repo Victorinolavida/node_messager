@@ -171,31 +171,7 @@ func recvJSON(t *testing.T, conn net.Conn, timeout time.Duration) dto.Message {
 	return m
 }
 
-func TestHub_SenderReceivesEcho(t *testing.T) {
-	_, _, _, addr := newTestHub(t)
-
-	sender := connectTCP(t, addr)
-	defer sender.Close() //nolint:errcheck
-
-	m := dto.Message{
-		ID:       "echo-1",
-		Type:     "direct",
-		FromNode: "nodeA",
-		ToNode:   "nodeB",
-		Content:  "ping",
-	}
-	sendJSON(t, sender, m)
-
-	got := recvJSON(t, sender, 2*time.Second)
-	if got.ID != m.ID {
-		t.Errorf("want id %q got %q", m.ID, got.ID)
-	}
-	if got.Content != m.Content {
-		t.Errorf("want content %q got %q", m.Content, got.Content)
-	}
-}
-
-func TestHub_MessageDeliveredToOtherClient(t *testing.T) {
+func TestHub_NoFanOut(t *testing.T) {
 	_, _, _, addr := newTestHub(t)
 
 	sender := connectTCP(t, addr)
@@ -203,24 +179,46 @@ func TestHub_MessageDeliveredToOtherClient(t *testing.T) {
 	receiver := connectTCP(t, addr)
 	defer receiver.Close() //nolint:errcheck
 
-	// Give hub time to register both clients.
 	time.Sleep(20 * time.Millisecond)
 
 	m := dto.Message{
-		ID:       "deliver-1",
+		ID:       "no-fanout-1",
 		Type:     "direct",
 		FromNode: "nodeA",
 		ToNode:   "nodeB",
-		Content:  "hello nodeB",
+		Content:  "hello",
 	}
 	sendJSON(t, sender, m)
 
-	got := recvJSON(t, receiver, 2*time.Second)
-	if got.ID != m.ID {
-		t.Errorf("want id %q got %q", m.ID, got.ID)
+	_ = receiver.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	scanner := bufio.NewScanner(receiver)
+	if scanner.Scan() {
+		t.Fatalf("hub should NOT fan-out messages to other clients, but got: %s", scanner.Text())
 	}
-	if got.Content != m.Content {
-		t.Errorf("want content %q got %q", m.Content, got.Content)
+}
+
+func TestHub_ConnectionStableUnderLoad(t *testing.T) {
+	_, _, path, addr := newTestHub(t)
+
+	conn := connectTCP(t, addr)
+	defer conn.Close() //nolint:errcheck
+
+	time.Sleep(20 * time.Millisecond)
+
+	const total = 500
+	for i := 0; i < total; i++ {
+		m := dto.Message{
+			ID:       fmt.Sprintf("load-%d", i),
+			Type:     "PING",
+			FromNode: "nodeA",
+			Content:  "",
+		}
+		sendJSON(t, conn, m)
+	}
+
+	entries := waitForFileEntries(t, path, total, 5*time.Second)
+	if len(entries) < total {
+		t.Errorf("expected %d stored messages, got %d — connection was dropped", total, len(entries))
 	}
 }
 

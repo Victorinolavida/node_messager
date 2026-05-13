@@ -104,7 +104,7 @@ func TestServe_MultipleClients(t *testing.T) {
 	}
 }
 
-func TestServe_MessageBroadcast(t *testing.T) {
+func TestServe_NoFanOut(t *testing.T) {
 	srv, ln := newTestServer(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -126,7 +126,6 @@ func TestServe_MessageBroadcast(t *testing.T) {
 	}
 	defer receiver.Close()
 
-	// give hub time to register both clients
 	time.Sleep(50 * time.Millisecond)
 
 	msg := dto.Message{
@@ -141,17 +140,9 @@ func TestServe_MessageBroadcast(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	_ = receiver.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = receiver.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 	scanner := bufio.NewScanner(receiver)
-	if !scanner.Scan() {
-		t.Fatalf("expected broadcast line, got nothing: %v", scanner.Err())
-	}
-
-	var got dto.Message
-	if err := json.Unmarshal(scanner.Bytes(), &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if got.ID != msg.ID || got.Content != msg.Content {
-		t.Fatalf("got %+v, want %+v", got, msg)
+	if scanner.Scan() {
+		t.Fatalf("hub should not fan-out messages to other clients, but got: %s", scanner.Text())
 	}
 }
