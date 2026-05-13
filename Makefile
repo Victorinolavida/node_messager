@@ -5,7 +5,7 @@ GO     := go
 # correr en modo dev local (4 nodos en un proceso)
 .PHONY: run-dev
 run-dev:
-	cp nodes-dev.json nodes.json && $(GO) run $(CMD)
+	cp nodes-ejemplo.json nodes.json && $(GO) run $(CMD)
 
 # correr con nodes.json actual (modo VM)
 .PHONY: run

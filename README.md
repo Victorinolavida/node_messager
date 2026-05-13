@@ -54,7 +54,7 @@ make build-linux                           # Linux amd64 para VMs
 
 ```bash
 # modo local
-cp nodes-dev.json nodes.json && go run ./cmd
+cp nodes-ejemplo.json nodes.json && go run ./cmd
 
 # modo VM (después de copiar el binario y nodes.json correcto)
 ./node_messager_linux_amd64

@@ -98,7 +98,7 @@ El array `nodes` es **idéntico en todas las VMs**. Solo cambia `host_id` según
 ## Ejecutar en modo local (pruebas)
 
 ```bash
-cp nodes-dev.json nodes.json
+cp nodes-ejemplo.json nodes.json
 go run ./cmd
 # ó
 ./node_messager
