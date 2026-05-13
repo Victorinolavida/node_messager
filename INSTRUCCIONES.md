@@ -25,18 +25,13 @@ go version
 
 ---
 
-## Clonar y compilar
+## Clonar y ejecutar
 
 ```bash
 git clone <repo>
 cd websockets_go
 go mod tidy
-
-# Compilar para Mac/Linux nativo
-go build -o node_messager ./cmd
-
-# Compilar para Linux amd64 (VMs)
-make build-linux
+go run ./cmd
 ```
 
 ---
@@ -116,47 +111,26 @@ Al iniciar se verifica el esquema de la base de datos:
 
 ## Despliegue en VMs
 
-### Opción A — Script automático
+**En cada VM (iniciar VM1 primero):**
 
+**Paso 1 — Clonar el repo:**
 ```bash
-# Solo generar configs (sin SSH)
-./setup.sh 192.168.100.102 192.168.100.103 192.168.100.104 192.168.100.105 --only-configs
-# genera: nodes-vm1.json, nodes-vm2.json, nodes-vm3.json, nodes-vm4.json
-
-# Compilar + generar configs + desplegar por SSH
-./setup.sh 192.168.100.102 192.168.100.103 192.168.100.104 192.168.100.105 victor
+git clone <repo> ~/node_messager
+cd ~/node_messager
+go mod tidy
 ```
 
-### Opción B — Manual
-
-**Paso 1 — Compilar:**
+**Paso 2 — Correr setup (activa NTP y crea nodes.json):**
 ```bash
-make build-linux
-# genera: node_messager_linux_amd64
+bash setup.sh <host_id>
+# ejemplo en VM2:
+bash setup.sh 2
 ```
 
-**Paso 2 — Habilitar NTP en cada VM (sincronización de relojes):**
+**Paso 3 — Iniciar el nodo:**
 ```bash
-# ejecutar en cada VM antes de desplegar
-sudo timedatectl set-ntp true
-# verificar:
-timedatectl status   # debe mostrar "NTP service: active"
-```
-
-**Paso 3 — Copiar binario a cada VM:**
-```bash
-scp node_messager_linux_amd64 victor@192.168.100.102:~/node_messager/
-scp node_messager_linux_amd64 victor@192.168.100.103:~/node_messager/
-scp node_messager_linux_amd64 victor@192.168.100.104:~/node_messager/
-scp node_messager_linux_amd64 victor@192.168.100.105:~/node_messager/
-```
-
-**Paso 4 — Crear nodes.json en cada VM** (ver formato arriba, solo cambia `host_id`)
-
-**Paso 5 — Ejecutar (iniciar VM1 primero):**
-```bash
-mkdir -p data logs messages tickets
-./node_messager_linux_amd64
+cd ~/node_messager
+go run ./cmd
 ```
 
 ---
@@ -270,9 +244,9 @@ El sistema opera con **4 sucursales**. El array `nodes` es idéntico en todas la
 ## Comandos
 
 ```bash
-make build           # compilar nativo
-make build-linux     # compilar Linux amd64
+make run-dev         # modo local (4 nodos en un proceso)
+make run             # modo VM (nodes.json ya configurado)
 make test            # correr tests
-make clean           # limpiar binarios
+make clean           # limpiar data/ y tickets/
 go mod tidy          # actualizar dependencias
 ```

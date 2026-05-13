@@ -56,5 +56,5 @@ echo "  ✓ nodes.json creado con host_id=${HOST_ID}"
 
 echo ""
 echo "=== VM${HOST_ID} lista ==="
-echo "Copia el binario node_messager a ~/node_messager/ y ejecuta:"
-echo "  cd ~/node_messager && ./node_messager"
+echo "Clona el repo en ~/node_messager y ejecuta:"
+echo "  cd ~/node_messager && go run ./cmd"
