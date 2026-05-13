@@ -54,6 +54,7 @@ func (p *Pool) get(n node.Node) (*tcpclient.Client, error) {
 }
 
 // Send manda un mensaje con contenido de texto al nodo destino
+// si el envio falla por conexion muerta, la elimina del pool para que el proximo intento reconecte
 func (p *Pool) Send(from node.Node, to node.Node, msgType, content string) error {
 	c, err := p.get(to)
 	if err != nil {
@@ -71,7 +72,14 @@ func (p *Pool) Send(from node.Node, to node.Node, msgType, content string) error
 	if err != nil {
 		return err
 	}
-	return c.Send(data)
+	if err := c.Send(data); err != nil {
+		// conexion muerta — la removemos del pool para reconectar en el proximo intento
+		p.mu.Lock()
+		delete(p.conns, to.ID)
+		p.mu.Unlock()
+		return fmt.Errorf("send to %s: %w", to.Name, err)
+	}
+	return nil
 }
 
 // SendJSON serializa el payload a JSON y lo manda como contenido del mensaje
