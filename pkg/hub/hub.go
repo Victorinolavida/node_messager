@@ -12,29 +12,38 @@ import (
 	"node_messager/pkg/msgstore"
 )
 
+// Client representa una conexion TCP activa al hub
 type Client struct {
 	hub  *Hub
 	conn net.Conn
+	// send es el canal por donde el hub manda mensajes a este cliente
 	send chan []byte
 }
 
+// Dispatcher es la interfaz que el hub usa para mandar mensajes al engine correcto
+// el NodeDispatcher implementa esta interfaz
 type Dispatcher interface {
 	Dispatch(msg dto.Message)
 }
 
+// Hub maneja todas las conexiones TCP entrantes al nodo
+// recibe mensajes, los guarda en el store y los pasa al dispatcher
 type Hub struct {
-	name       string
-	clients    map[*Client]bool
-	broadcast  chan []byte
-	register   chan *Client
+	name      string
+	clients   map[*Client]bool
+	broadcast chan []byte
+	register  chan *Client
+	// unregister se usa para limpiar la conexion cuando un cliente se desconecta
 	unregister chan *Client
 	log        *zap.SugaredLogger
 	store      *msgstore.Store
 	dispatcher Dispatcher
 }
 
+// SetDispatcher asigna el dispatcher al hub — se llama una vez al inicio antes de Run
 func (h *Hub) SetDispatcher(d Dispatcher) { h.dispatcher = d }
 
+// New crea un nuevo Hub para el nodo con el nombre dado
 func New(name string, log *zap.SugaredLogger, store *msgstore.Store) *Hub {
 	return &Hub{
 		name:       name,
@@ -47,6 +56,8 @@ func New(name string, log *zap.SugaredLogger, store *msgstore.Store) *Hub {
 	}
 }
 
+// Run es el loop principal del hub — procesa conexiones, desconexiones y mensajes
+// debe correr en su propia goroutine
 func (h *Hub) Run() {
 	for {
 		select {
@@ -67,6 +78,7 @@ func (h *Hub) Run() {
 				h.log.Warnf("[%s] invalid message payload: %v", h.name, err)
 				continue
 			}
+			// guardamos el mensaje recibido en el store para el historial
 			if h.store != nil {
 				if err := h.store.Save(msg, msgstore.Received); err != nil {
 					h.log.Warnf("[%s] store save: %v", h.name, err)
@@ -75,14 +87,17 @@ func (h *Hub) Run() {
 			h.log.Infof("[%s] recv  type=%s from=%s to=%s id=%s — %q",
 				h.name, msg.Type, msg.FromNode, msg.ToNode, msg.ID, msg.Content)
 
+			// mandamos el mensaje al dispatcher para que lo procese segun su tipo
 			if h.dispatcher != nil {
 				go h.dispatcher.Dispatch(msg)
 			}
 
+			// reenviamos el mensaje a todos los clientes conectados (fan-out)
 			for c := range h.clients {
 				select {
 				case c.send <- data:
 				default:
+					// el canal del cliente esta lleno — lo desconectamos
 					close(c.send)
 					delete(h.clients, c)
 				}
@@ -91,6 +106,7 @@ func (h *Hub) Run() {
 	}
 }
 
+// Serve registra una conexion TCP nueva al hub y arranca sus goroutines de lectura y escritura
 func (h *Hub) Serve(conn net.Conn) {
 	c := &Client{hub: h, conn: conn, send: make(chan []byte, 256)}
 	h.register <- c
@@ -98,6 +114,7 @@ func (h *Hub) Serve(conn net.Conn) {
 	go c.readPump()
 }
 
+// readPump lee lineas del TCP y las manda al canal broadcast del hub
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
@@ -114,6 +131,7 @@ func (c *Client) readPump() {
 	}
 }
 
+// writePump escribe mensajes del canal send a la conexion TCP
 func (c *Client) writePump() {
 	defer func() {
 		if err := c.conn.Close(); err != nil {

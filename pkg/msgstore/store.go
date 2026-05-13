@@ -17,23 +17,30 @@ const (
 	Received EntryType = "received"
 )
 
+// Entry representa un mensaje guardado en el historial con su timestamp y direccion
 type Entry struct {
 	At   time.Time   `json:"at"`
 	Type EntryType   `json:"type"`
 	Msg  dto.Message `json:"msg"`
 }
 
+// Store guarda el historial de mensajes en memoria con un limite maximo
+// opcionalmente persiste a un archivo JSONL para sobrevivir reinicios
 type Store struct {
 	mu      sync.Mutex
 	entries []Entry
-	max     int
-	file    *os.File
+	// max es el numero maximo de mensajes que guardamos en memoria
+	max  int
+	file *os.File
 }
 
+// New crea un Store solo en memoria sin persistencia a disco
 func New(max int) *Store {
 	return &Store{max: max, entries: make([]Entry, 0, max)}
 }
 
+// NewWithFile crea un Store que persiste a un archivo JSONL
+// carga los mensajes existentes del archivo al iniciar
 func NewWithFile(max int, path string) (*Store, error) {
 	existing := loadFromFile(path, max)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -43,6 +50,8 @@ func NewWithFile(max int, path string) (*Store, error) {
 	return &Store{max: max, entries: existing, file: f}, nil
 }
 
+// loadFromFile lee el historial de un archivo JSONL linea por linea
+// si el archivo no existe regresa una lista vacia
 func loadFromFile(path string, max int) []Entry {
 	f, err := os.Open(path)
 	if err != nil {
@@ -63,12 +72,15 @@ func loadFromFile(path string, max int) []Entry {
 		}
 		entries = append(entries, e)
 	}
+	// si hay mas entradas que el maximo, conservamos solo las mas recientes
 	if len(entries) > max {
 		entries = entries[len(entries)-max:]
 	}
 	return entries
 }
 
+// Save guarda un mensaje en el historial y lo escribe al archivo si hay uno configurado
+// si se supera el maximo, descartamos los mensajes mas antiguos
 func (s *Store) Save(msg dto.Message, t EntryType) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -89,6 +101,7 @@ func (s *Store) Save(msg dto.Message, t EntryType) error {
 	return nil
 }
 
+// Latest regresa los ultimos n mensajes del historial
 func (s *Store) Latest(n int) ([]Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

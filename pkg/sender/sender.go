@@ -13,17 +13,21 @@ import (
 	"node_messager/pkg/tcpclient"
 )
 
-// Pool manages reusable TCP connections to other nodes.
+// Pool maneja las conexiones TCP salientes a otros nodos
+// reutiliza conexiones existentes para evitar el overhead de reconectarse en cada mensaje
 type Pool struct {
 	mu    sync.Mutex
+	// conns es el mapa de id de nodo a su conexion TCP activa
 	conns map[int]*tcpclient.Client
 	log   *zap.SugaredLogger
 }
 
+// NewPool crea un nuevo Pool de conexiones
 func NewPool(log *zap.SugaredLogger) *Pool {
 	return &Pool{conns: make(map[int]*tcpclient.Client), log: log}
 }
 
+// CloseAll cierra todas las conexiones activas — se usa al apagar el nodo
 func (p *Pool) CloseAll() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -33,12 +37,14 @@ func (p *Pool) CloseAll() {
 	}
 }
 
+// get regresa la conexion existente al nodo o crea una nueva si no existe o esta cerrada
 func (p *Pool) get(n node.Node) (*tcpclient.Client, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if c, ok := p.conns[n.ID]; ok && !c.IsClosed() {
 		return c, nil
 	}
+	// no hay conexion activa — creamos una nueva
 	c, err := tcpclient.Connect(n.Host, n.Port)
 	if err != nil {
 		return nil, err
@@ -47,7 +53,7 @@ func (p *Pool) get(n node.Node) (*tcpclient.Client, error) {
 	return c, nil
 }
 
-// Send sends a typed message to target node.
+// Send manda un mensaje con contenido de texto al nodo destino
 func (p *Pool) Send(from node.Node, to node.Node, msgType, content string) error {
 	c, err := p.get(to)
 	if err != nil {
@@ -68,7 +74,7 @@ func (p *Pool) Send(from node.Node, to node.Node, msgType, content string) error
 	return c.Send(data)
 }
 
-// SendJSON marshals payload to JSON then sends.
+// SendJSON serializa el payload a JSON y lo manda como contenido del mensaje
 func (p *Pool) SendJSON(from node.Node, to node.Node, msgType string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -77,7 +83,8 @@ func (p *Pool) SendJSON(from node.Node, to node.Node, msgType string, payload an
 	return p.Send(from, to, msgType, string(data))
 }
 
-// Broadcast sends to all targets, returns per-node errors.
+// Broadcast manda el mismo mensaje a todos los nodos en targets
+// regresa un mapa de errores por nodo — si el mapa esta vacio, todo salio bien
 func (p *Pool) Broadcast(from node.Node, targets []node.Node, msgType, content string) map[int]error {
 	errs := make(map[int]error)
 	for _, t := range targets {
@@ -89,7 +96,7 @@ func (p *Pool) Broadcast(from node.Node, targets []node.Node, msgType, content s
 	return errs
 }
 
-// BroadcastJSON marshals payload then broadcasts.
+// BroadcastJSON serializa el payload a JSON y lo manda a todos los nodos en targets
 func (p *Pool) BroadcastJSON(from node.Node, targets []node.Node, msgType string, payload any) map[int]error {
 	data, err := json.Marshal(payload)
 	if err != nil {
