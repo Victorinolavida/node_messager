@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# setup-vms.sh — correr DENTRO de cada VM
+# setup.sh — correr DENTRO de cada VM
 #
 # 1. Activa sincronizacion de tiempo via NTP
-# 2. Crea nodes.json con IPs de ejemplo — edita las IPs antes de iniciar el nodo
+# 2. Crea nodes.json con host_id correcto
 #
 # Uso:
-#   bash setup-vms.sh <host_id>
+#   bash setup.sh <host_id>
 #
 # Ejemplo en VM2:
-#   bash setup-vms.sh 2
+#   bash setup.sh 2
 
 set -euo pipefail
 
@@ -31,14 +31,14 @@ echo "  ✓ NTP activo"
 
 echo ""
 echo "=== Creando directorios ==="
-mkdir -p ~/node_messager/data ~/node_messager/logs ~/node_messager/messages ~/node_messager/tickets
+mkdir -p data logs messages tickets
 echo "  ✓ directorios listos"
 
 # ── nodes.json ────────────────────────────────────────────────────────────────
 
 echo ""
 echo "=== Creando nodes.json ==="
-cat > ~/node_messager/nodes.json << EOF
+cat > nodes.json << EOF
 {
   "master_id": 1,
   "host_id": ${HOST_ID},
@@ -56,5 +56,4 @@ echo "  ✓ nodes.json creado con host_id=${HOST_ID}"
 
 echo ""
 echo "=== VM${HOST_ID} lista ==="
-echo "Clona el repo en ~/node_messager y ejecuta:"
-echo "  cd ~/node_messager && go run ./cmd"
+echo "Iniciar nodo: go run ./cmd"
