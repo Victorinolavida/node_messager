@@ -49,6 +49,9 @@ type TicketService struct {
 	queryWait map[string]*queryCollector
 }
 
+// queryCollector agrupa las respuestas de una consulta distribuida
+// expected indica cuantas respuestas esperamos (una por peer vivo)
+// cuando results llega a expected, cerramos done para desbloquear ListAll
 type queryCollector struct {
 	table    string
 	expected int
@@ -56,6 +59,7 @@ type queryCollector struct {
 	done     chan struct{}
 }
 
+// New crea un nuevo TicketService con todos sus engines
 func New(
 	self node.Node,
 	state *nodestate.State,
@@ -94,7 +98,8 @@ func (s *TicketService) AddIngeniero(ctx context.Context, nombre string) error {
 	return s.consensus.Propose(ctx, "INSERT_INGENIERO", string(data))
 }
 
-// AddDevice routes to master for equitable distribution, or broadcasts if we are master.
+// AddDevice manda el dispositivo al maestro para que lo distribuya equitativamente
+// si somos el maestro, lo distribuimos directamente
 func (s *TicketService) AddDevice(ctx context.Context, nombre, tipo string) error {
 	if s.state.IsMaster() {
 		return s.distributeDevice(ctx, nombre, tipo)
@@ -108,6 +113,8 @@ func (s *TicketService) AddDevice(ctx context.Context, nombre, tipo string) erro
 	return s.pool.SendJSON(s.self, *master, dto.TypeAddDevice, p)
 }
 
+// distributeDevice asigna el dispositivo al ingeniero con menos dispositivos asignados
+// esto solo lo ejecuta el maestro para garantizar distribucion equitativa
 func (s *TicketService) distributeDevice(ctx context.Context, nombre, tipo string) error {
 	// query all engineers across all nodes
 	engRows, err := s.ListAll(ctx, "INGENIEROS")
@@ -169,7 +176,8 @@ const (
 	raiseRetryDelay = 2 * time.Second
 )
 
-// RaiseTicket opens a new ticket with mutual exclusion + consensus. Retries on failure.
+// RaiseTicket crea un nuevo ticket con exclusion mutua y consenso
+// reintenta hasta raiseMaxRetries veces si falla para tolerar fallos transitorios
 func (s *TicketService) RaiseTicket(ctx context.Context, idUsuario, idDispositivo int) error {
 	var lastErr error
 	for attempt := 1; attempt <= raiseMaxRetries; attempt++ {
@@ -192,6 +200,12 @@ func (s *TicketService) RaiseTicket(ctx context.Context, idUsuario, idDispositiv
 	return lastErr
 }
 
+// raiseTicket es la logica interna de crear un ticket:
+// 1. adquiere el lock de exclusion mutua para evitar doble asignacion
+// 2. busca un ingeniero disponible en todos los nodos
+// 3. crea el ticket via consenso
+// 4. genera el archivo de folio
+// 5. marca al ingeniero como no disponible via consenso
 func (s *TicketService) raiseTicket(ctx context.Context, idUsuario, idDispositivo int) error {
 	release, err := s.mutex.Acquire(ctx)
 	if err != nil {
@@ -262,6 +276,8 @@ func (s *TicketService) raiseTicket(ctx context.Context, idUsuario, idDispositiv
 	return nil
 }
 
+// CloseTicket cierra un ticket y libera al ingeniero asignado via consenso
+// el ingeniero queda disponible para recibir nuevos tickets
 func (s *TicketService) CloseTicket(ctx context.Context, idTicket int64, idIngeniero int) error {
 	type closeData struct {
 		IDTicket    int64 `json:"id_ticket"`
@@ -272,7 +288,8 @@ func (s *TicketService) CloseTicket(ctx context.Context, idTicket int64, idIngen
 	return s.consensus.Propose(ctx, "CLOSE_TICKET", string(data))
 }
 
-// RedistributeTickets reassigns open tickets from a dead node to available engineers.
+// RedistributeTickets reasigna los tickets abiertos de un nodo caido a ingenieros disponibles
+// solo lo ejecuta el maestro cuando detecta que un nodo murio
 func (s *TicketService) RedistributeTickets(ctx context.Context, deadNodeID int) {
 	tickets, err := s.db.GetOpenTicketsBySucursal(deadNodeID)
 	if err != nil {
@@ -322,7 +339,8 @@ func (s *TicketService) RedistributeTickets(ctx context.Context, deadNodeID int)
 
 // ── Cross-node queries ────────────────────────────────────────────────────────
 
-// ListAll broadcasts QUERY to all peers and aggregates with local results.
+// ListAll manda QUERY a todos los peers y combina sus respuestas con los datos locales
+// es la forma de obtener todos los datos de una tabla distribuida entre los nodos
 func (s *TicketService) ListAll(ctx context.Context, table string) ([]any, error) {
 	queryID := fmt.Sprintf("%s-%d-%d", table, s.self.ID, time.Now().UnixNano())
 	peers := s.state.AlivePeers()
@@ -381,7 +399,7 @@ func (s *TicketService) ListAll(ctx context.Context, table string) ([]any, error
 	return result, nil
 }
 
-// HandleQuery responds to a QUERY from another node with local rows.
+// HandleQuery responde a un QUERY de otro nodo con las filas locales de esa tabla
 func (s *TicketService) HandleQuery(msg dto.Message) {
 	var p dto.QueryPayload
 	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil {
@@ -410,7 +428,8 @@ func (s *TicketService) HandleQuery(msg dto.Message) {
 	_ = s.pool.SendJSON(s.self, *requester, dto.TypeQueryResponse, resp)
 }
 
-// HandleQueryResponse collects a query response.
+// HandleQueryResponse recibe la respuesta de un peer y la agrega al queryCollector
+// cuando llegaron todas las respuestas esperadas, cierra el canal done para desbloquear ListAll
 func (s *TicketService) HandleQueryResponse(msg dto.Message) {
 	var p dto.QueryResponsePayload
 	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil {
@@ -433,7 +452,8 @@ func (s *TicketService) HandleQueryResponse(msg dto.Message) {
 	s.queryMu.Unlock()
 }
 
-// HandleAddDevice is called on master when a non-master node wants to add a device.
+// HandleAddDevice se llama en el maestro cuando un nodo no-maestro quiere agregar un dispositivo
+// el maestro es quien decide a que ingeniero asignarlo para distribucion equitativa
 func (s *TicketService) HandleAddDevice(ctx context.Context, msg dto.Message) {
 	if !s.state.IsMaster() {
 		return
@@ -449,6 +469,7 @@ func (s *TicketService) HandleAddDevice(ctx context.Context, msg dto.Message) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// localRows consulta la base de datos local y regresa las filas de la tabla pedida
 func (s *TicketService) localRows(table string) ([]any, error) {
 	switch table {
 	case "INGENIEROS":
@@ -499,6 +520,7 @@ func (s *TicketService) localRows(table string) ([]any, error) {
 	return nil, fmt.Errorf("unknown table: %s", table)
 }
 
+// unmarshalRows convierte el JSON de una respuesta QUERY_RESPONSE al tipo correcto segun la tabla
 func unmarshalRows(table string, raw json.RawMessage) ([]any, error) {
 	switch table {
 	case "INGENIEROS":
@@ -545,6 +567,8 @@ func unmarshalRows(table string, raw json.RawMessage) ([]any, error) {
 	return nil, fmt.Errorf("unknown table: %s", table)
 }
 
+// splitQueryID separa el queryID de la tabla en el formato "queryID|tabla"
+// usamos este formato para que el peer sepa a cual ListAll responder
 func splitQueryID(raw string) (queryID, table string) {
 	for i := 0; i < len(raw); i++ {
 		if raw[i] == '|' {

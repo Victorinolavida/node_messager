@@ -6,14 +6,19 @@ import (
 	"node_messager/pkg/node"
 )
 
+// State guarda el estado en memoria del nodo actual en el cluster
+// todos los engines (consensus, mutex, election, heartbeat) lo consultan
+// para saber quienes estan vivos y quien es el maestro
 type State struct {
 	mu       sync.RWMutex
 	self     node.Node
 	all      []node.Node
 	masterID int
-	alive    map[int]bool
+	// alive lleva un mapa de id -> bool para saber que nodos estan activos
+	alive map[int]bool
 }
 
+// New crea un nuevo State — al inicio todos los nodos se consideran vivos
 func New(self node.Node, all []node.Node, masterID int) *State {
 	alive := make(map[int]bool, len(all))
 	for _, n := range all {
@@ -22,8 +27,10 @@ func New(self node.Node, all []node.Node, masterID int) *State {
 	return &State{self: self, all: all, masterID: masterID, alive: alive}
 }
 
+// Self regresa el nodo actual
 func (s *State) Self() node.Node { return s.self }
 
+// All regresa todos los nodos del cluster incluyendo el nodo actual
 func (s *State) All() []node.Node {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -32,6 +39,7 @@ func (s *State) All() []node.Node {
 	return out
 }
 
+// Peers regresa todos los nodos del cluster excepto el nodo actual
 func (s *State) Peers() []node.Node {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -44,6 +52,8 @@ func (s *State) Peers() []node.Node {
 	return out
 }
 
+// AlivePeers regresa solo los peers que el heartbeat ha marcado como vivos
+// se usa para calcular el quorum en consensus y para saber a quien mandar mensajes
 func (s *State) AlivePeers() []node.Node {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -56,6 +66,7 @@ func (s *State) AlivePeers() []node.Node {
 	return out
 }
 
+// AliveCount regresa cuantos nodos estan vivos incluyendo el nodo actual
 func (s *State) AliveCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -68,42 +79,49 @@ func (s *State) AliveCount() int {
 	return n
 }
 
+// MarkAlive marca un nodo como vivo — lo llama heartbeat al recibir PONG
 func (s *State) MarkAlive(id int) {
 	s.mu.Lock()
 	s.alive[id] = true
 	s.mu.Unlock()
 }
 
+// MarkDead marca un nodo como muerto — lo llama heartbeat cuando supera maxMissed
 func (s *State) MarkDead(id int) {
 	s.mu.Lock()
 	s.alive[id] = false
 	s.mu.Unlock()
 }
 
+// IsAlive regresa si un nodo esta marcado como vivo
 func (s *State) IsAlive(id int) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.alive[id]
 }
 
+// GetMasterID regresa el ID del nodo maestro actual
 func (s *State) GetMasterID() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.masterID
 }
 
+// SetMasterID actualiza el maestro — lo llama election cuando hay un nuevo coordinador
 func (s *State) SetMasterID(id int) {
 	s.mu.Lock()
 	s.masterID = id
 	s.mu.Unlock()
 }
 
+// IsMaster regresa si el nodo actual es el maestro
 func (s *State) IsMaster() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.self.ID == s.masterID
 }
 
+// GetMasterNode regresa el nodo maestro completo para poder mandarle mensajes TCP
 func (s *State) GetMasterNode() *node.Node {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -116,6 +134,8 @@ func (s *State) GetMasterNode() *node.Node {
 	return nil
 }
 
+// NodeByName busca un nodo por nombre — se usa para responder mensajes TCP
+// donde solo conocemos el nombre del nodo que mando el mensaje
 func (s *State) NodeByName(name string) *node.Node {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -128,6 +148,7 @@ func (s *State) NodeByName(name string) *node.Node {
 	return nil
 }
 
+// NodeByID busca un nodo por ID — se usa para rutear mensajes al nodo propietario de un dato
 func (s *State) NodeByID(id int) *node.Node {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

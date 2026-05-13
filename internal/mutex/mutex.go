@@ -15,30 +15,38 @@ import (
 	"node_messager/pkg/sender"
 )
 
-var lockTimeout = 5 * time.Second // var so tests can override
+// lockTimeout es cuanto esperamos a que el maestro nos otorgue el lock
+// si el maestro tarda mas de esto, asumimos que hubo un problema y reintentamos
+var lockTimeout = 5 * time.Second
 
 const (
 	acquireMaxRetries = 3
 	acquireRetryDelay = 1 * time.Second
 )
 
+// pendingReq representa una solicitud de lock en espera en la cola del maestro
 type pendingReq struct {
 	requestID string
 	fromNode  string
 }
 
+// Engine maneja la exclusion mutua distribuida usando el nodo maestro como arbitro
+// solo un nodo puede tener el lock a la vez — evita doble asignacion de ingenieros
 type Engine struct {
-	self   node.Node
-	state  *nodestate.State
-	pool   *sender.Pool
-	log    *zap.SugaredLogger
-	mu     sync.Mutex
-	holder string       // request_id of current holder, "" = free
-	queue  []pendingReq // waiting requests
-	// pending grants for self when acting as non-master requester
+	self  node.Node
+	state *nodestate.State
+	pool  *sender.Pool
+	log   *zap.SugaredLogger
+	mu    sync.Mutex
+	// holder es el requestID del nodo que tiene el lock actualmente, "" significa libre
+	holder string
+	// queue es la fila de solicitudes esperando a que se libere el lock (orden FIFO)
+	queue []pendingReq
+	// grants son los canales donde esperamos que el maestro nos otorgue el lock
 	grants map[string]chan bool
 }
 
+// New crea un nuevo Engine de exclusion mutua
 func New(self node.Node, state *nodestate.State, pool *sender.Pool, log *zap.SugaredLogger) *Engine {
 	return &Engine{
 		self:   self,
@@ -49,7 +57,9 @@ func New(self node.Node, state *nodestate.State, pool *sender.Pool, log *zap.Sug
 	}
 }
 
-// Acquire blocks until the distributed lock is held. Retries on transient failure.
+// Acquire bloquea hasta obtener el lock distribuido
+// regresa una funcion release que debe llamarse al terminar la operacion critica
+// reintenta hasta acquireMaxRetries veces si falla
 func (e *Engine) Acquire(ctx context.Context) (func(), error) {
 	var (
 		release func()
@@ -75,6 +85,7 @@ func (e *Engine) Acquire(ctx context.Context) (func(), error) {
 	return nil, lastErr
 }
 
+// acquire decide si adquirir el lock localmente (si somos maestro) o remotamente
 func (e *Engine) acquire(ctx context.Context) (func(), error) {
 	if e.state.IsMaster() {
 		return e.acquireLocal()
@@ -82,19 +93,21 @@ func (e *Engine) acquire(ctx context.Context) (func(), error) {
 	return e.acquireRemote(ctx)
 }
 
+// acquireLocal adquiere el lock en memoria cuando este nodo es el maestro
+// si el lock esta libre lo toma inmediatamente, si no, se encola y espera
 func (e *Engine) acquireLocal() (func(), error) {
 	reqID := uuid.New().String()
 	e.mu.Lock()
 	if e.holder == "" {
+		// lock libre — lo tomamos de inmediato
 		e.holder = reqID
 		e.mu.Unlock()
 		return func() { e.releaseLocal(reqID) }, nil
 	}
-	// queue self and wait synchronously (simplified: spin with short wait)
+	// lock ocupado — nos encolamos y esperamos a que nos lo otorguen
 	e.queue = append(e.queue, pendingReq{requestID: reqID, fromNode: e.self.Name})
 	e.mu.Unlock()
 
-	// wait until granted
 	ch := make(chan bool, 1)
 	e.mu.Lock()
 	e.grants[reqID] = ch
@@ -108,6 +121,8 @@ func (e *Engine) acquireLocal() (func(), error) {
 	}
 }
 
+// releaseLocal libera el lock y otorga el siguiente en la cola (FIFO)
+// si el siguiente es un nodo remoto, le manda LOCK_GRANT por TCP
 func (e *Engine) releaseLocal(reqID string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -120,10 +135,11 @@ func (e *Engine) releaseLocal(reqID string) {
 		e.queue = e.queue[1:]
 		e.holder = next.requestID
 		if ch, ok := e.grants[next.requestID]; ok {
+			// el siguiente en la cola es local — notificamos via canal
 			ch <- true
 			delete(e.grants, next.requestID)
 		} else {
-			// remote node waiting — send LOCK_GRANT
+			// el siguiente en la cola es un nodo remoto — mandamos LOCK_GRANT por TCP
 			peer := e.state.NodeByName(next.fromNode)
 			if peer != nil {
 				p := dto.LockPayload{RequestID: next.requestID, Resource: "engineer_assignment"}
@@ -133,6 +149,9 @@ func (e *Engine) releaseLocal(reqID string) {
 	}
 }
 
+// acquireRemote solicita el lock al maestro via TCP y espera la respuesta
+// si el maestro responde LOCK_GRANT, retornamos con el lock adquirido
+// si el maestro responde LOCK_DENY, quedamos encolados en el maestro y esperamos
 func (e *Engine) acquireRemote(ctx context.Context) (func(), error) {
 	master := e.state.GetMasterNode()
 	if master == nil {
@@ -159,6 +178,7 @@ func (e *Engine) acquireRemote(ctx context.Context) (func(), error) {
 		if !granted {
 			return nil, fmt.Errorf("mutex: lock denied")
 		}
+		// tenemos el lock — la funcion release manda LOCK_RELEASE al maestro
 		release := func() {
 			p := dto.LockPayload{RequestID: reqID, Resource: "engineer_assignment"}
 			_ = e.pool.SendJSON(e.self, *master, dto.TypeLockRelease, p)
@@ -174,7 +194,8 @@ func (e *Engine) acquireRemote(ctx context.Context) (func(), error) {
 	}
 }
 
-// HandleLockRequest is called on the master when a peer wants the lock.
+// HandleLockRequest se llama en el maestro cuando un nodo pide el lock
+// si el lock esta libre lo otorga, si no, encola al nodo y le responde LOCK_DENY
 func (e *Engine) HandleLockRequest(msg dto.Message) {
 	var p dto.LockPayload
 	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil {
@@ -184,6 +205,7 @@ func (e *Engine) HandleLockRequest(msg dto.Message) {
 
 	e.mu.Lock()
 	if e.holder == "" {
+		// lock libre — se lo otorgamos
 		e.holder = p.RequestID
 		e.mu.Unlock()
 		peer := e.state.NodeByName(msg.FromNode)
@@ -191,6 +213,7 @@ func (e *Engine) HandleLockRequest(msg dto.Message) {
 			_ = e.pool.SendJSON(e.self, *peer, dto.TypeLockGrant, p)
 		}
 	} else {
+		// lock ocupado — encolamos al nodo y le avisamos que espere
 		e.queue = append(e.queue, pendingReq{requestID: p.RequestID, fromNode: msg.FromNode})
 		e.mu.Unlock()
 		peer := e.state.NodeByName(msg.FromNode)
@@ -200,7 +223,8 @@ func (e *Engine) HandleLockRequest(msg dto.Message) {
 	}
 }
 
-// HandleLockGrant is called when this node receives LOCK_GRANT from master.
+// HandleLockGrant se llama cuando el maestro nos otorga el lock
+// notificamos al acquireRemote que esta esperando en su canal
 func (e *Engine) HandleLockGrant(msg dto.Message) {
 	var p dto.LockPayload
 	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil {
@@ -214,12 +238,14 @@ func (e *Engine) HandleLockGrant(msg dto.Message) {
 	}
 }
 
-// HandleLockDeny is called when master says lock is busy — re-queue wait.
+// HandleLockDeny se llama cuando el maestro nos dice que el lock esta ocupado
+// no hacemos nada — ya quedamos encolados en el maestro y esperamos el LOCK_GRANT
 func (e *Engine) HandleLockDeny(msg dto.Message) {
-	// DENY means queued on master; just keep waiting (grant will arrive later)
+	// el maestro nos encolo — el LOCK_GRANT llegara cuando se libere el lock
 }
 
-// HandleLockRelease is called on master when a peer releases the lock.
+// HandleLockRelease se llama en el maestro cuando un nodo libera el lock
+// llama releaseLocal para otorgarlo al siguiente en la cola
 func (e *Engine) HandleLockRelease(msg dto.Message) {
 	var p dto.LockPayload
 	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil {
