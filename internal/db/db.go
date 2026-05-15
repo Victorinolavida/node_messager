@@ -17,6 +17,11 @@ func Open(name string) (*DB, error) {
 	return openAt(fmt.Sprintf("data/%s.db", name))
 }
 
+// OpenAt abre la conexion a la base de datos en una ruta especifica
+func OpenAt(path string) (*DB, error) {
+	return openAt(path)
+}
+
 func openAt(path string) (*DB, error) {
 	// aqui usamos sqlite por simplicidad, ya que sqlite no require
 	// configuracion adiciona a cada vm/nodo
@@ -286,8 +291,7 @@ func (d *DB) InsertTicketFull(t Ticket) error {
 	return err
 }
 
-// UpdateTicketFolio actualiza el folio del ticket, el folio es el nombre del archivo
-// que se genera al crear el ticket con el formato USUARIO-INGENIERO-SUCURSAL-TICKET.txt
+// UpdateTicketFolio actualiza el folio del ticket con el formato USUARIO-INGENIERO-SUCURSAL-TICKET
 func (d *DB) UpdateTicketFolio(id int64, folio string) error {
 	_, err := d.sql.Exec(`UPDATE TICKETS SET folio=? WHERE id=?`, folio, id)
 	return err

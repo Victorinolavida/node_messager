@@ -148,8 +148,13 @@ func (e *Engine) HandleCoordinator(msg dto.Message) {
 	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil {
 		return
 	}
+	oldMaster := e.state.GetMasterID()
 	e.state.SetMasterID(p.MasterID)
-	e.log.Infof("[election] new master id=%d (announced by %s)", p.MasterID, msg.FromNode)
+	if oldMaster != p.MasterID {
+		e.log.Infof("[election] master changed: old=%d new=%d (announced by %s)", oldMaster, p.MasterID, msg.FromNode)
+	} else {
+		e.log.Infof("[election] master confirmed id=%d (announced by %s)", p.MasterID, msg.FromNode)
+	}
 }
 
 // lowerNodes regresa los nodos vivos con ID menor al nuestro

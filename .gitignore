@@ -2,7 +2,6 @@ logs/
 messages/
 CLAUDE.md
 data/
-tickets/
 nodes-vm*.json
 nodes.json
 setup-vm*.sh

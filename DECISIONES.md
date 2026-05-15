@@ -52,17 +52,19 @@ Cumple el requisito del profesor ("debe haber consenso") con complejidad manejab
 
 ---
 
-## 4. Elección de líder: Bully algorithm
+## 4. Elección de líder: Bully algorithm (inverso)
 
 ### Alternativas consideradas
 | Algoritmo | Descripción | Por qué no |
 |-----------|-------------|------------|
 | Ring election | Mensajes circulan en anillo; gana el mayor ID | Requiere topología en anillo, más difícil de mantener con nodos que entran/salen |
 | Raft leader election | Basada en términos y votos | Acoplada al log replicado de Raft; no aplica sin el resto de Raft |
-| Bully (elegido) | El nodo con mayor ID activo gana | Simple, sin topología especial, fácil de razonar |
+| Bully inverso (elegido) | El nodo con menor ID activo gana (mayor prioridad) | Simple, sin topología especial, fácil de razonar |
 
-### Decisión: Bully algorithm
-Cada nodo conoce los IDs de todos los demás (configuración estática). Al detectar que el maestro cayó, el nodo inicia elección enviando `ELECTION` a nodos con ID mayor. Si nadie responde en 3 segundos, se declara ganador. Fácil de depurar y verificar.
+### Decisión: Bully algorithm (inverso)
+Variante del Bully clásico donde **menor ID = mayor prioridad**. Cada nodo conoce los IDs de todos los demás (configuración estática). Al detectar que el maestro cayó, el nodo inicia elección enviando `ELECTION` a nodos con ID menor (mayor prioridad). Si nadie responde en 3 segundos, se declara ganador. Esto garantiza que el nodo con ID más bajo siempre recupere el rol de maestro cuando vuelve.
+
+**Cómo funciona:** el nodo que detecta la falla envía `ELECTION` a todos los nodos con ID menor. Si alguno responde `ELECTION_OK`, ese nodo tiene mayor prioridad y toma el relevo. El proceso se repite hasta que el nodo con menor ID activo no recibe respuesta de nadie con ID menor — entonces se declara maestro y envía `COORDINATOR` a todos.
 
 **Lo que se sacrifica:** Bully genera O(n²) mensajes en el peor caso (todos inician elección simultáneamente). Con 4 nodos esto es insignificante. En un sistema con cientos de nodos sería un problema.
 
@@ -130,6 +132,64 @@ Esto es coherente con el teorema CAP: al requerir consenso (C), se sacrifica dis
 
 ---
 
+## 9. Folio del ticket: concatenación en base de datos
+
+### Alternativas consideradas
+| Opción | Por qué se descartó |
+|--------|---------------------|
+| Archivo físico `.txt` por ticket | Agrega estado fuera de la BD: los archivos pueden desincronizarse, perderse, o no replicarse entre nodos. Dificulta las consultas distribuidas |
+| UUID como folio | No permite identificar de un vistazo a qué usuario, ingeniero, sucursal y ticket corresponde |
+| Auto-increment de SQLite como folio | Colisiona entre nodos y no codifica información útil |
+
+### Decisión: concatenación de IDs almacenada en la BD
+El folio se genera como `IDUSUARIO-IDINGENIERO-IDSUCURSAL-IDTICKET` y se almacena en la columna `folio` de la tabla TICKETS. No se crea ningún archivo físico — toda la información vive en la base de datos.
+
+**Cómo funciona:** al crear un ticket, después de que el consenso aprueba el `INSERT_TICKET`, el nodo genera el string del folio concatenando los IDs y lo persiste vía un segundo consenso (`UPDATE_TICKET_FOLIO`). Al listar tickets (opción 9 del menú), el folio se muestra junto con los demás campos.
+
+**Lo que se sacrifica:** no hay un comprobante físico fuera de la base de datos. Esto es aceptable porque el profesor confirmó que al usar base de datos, los registros en las tablas son suficientes como comprobante.
+
+---
+
+## 10. Prevención de colisiones y condiciones de carrera
+
+El sistema enfrenta tres tipos de colisiones potenciales y las resuelve con mecanismos distintos:
+
+### Colisión de IDs entre nodos
+
+**Problema:** si dos nodos generan IDs con auto-increment de SQLite al mismo tiempo, ambos podrían generar el mismo ID (ej. id=1 en nodo1 y id=1 en nodo2).
+
+**Solución:** cada ID se genera como `nodeID × 10_000_000_000 + contador_atómico`. El prefijo del nodo garantiza que dos nodos distintos nunca generen el mismo ID. Dentro del mismo nodo, `sync/atomic` garantiza que el contador nunca se repita, incluso con goroutines concurrentes.
+
+```
+nodo 1: 10_000_000_001, 10_000_000_002, ...
+nodo 2: 20_000_000_001, 20_000_000_002, ...
+→ nunca colisionan
+```
+
+### Condición de carrera: doble asignación de ingeniero
+
+**Problema:** si nodo1 y nodo2 levantan un ticket simultáneamente, ambos buscan un ingeniero disponible. Ambos podrían encontrar al mismo ingeniero (ing_A) y asignarlo a dos tickets distintos.
+
+**Solución:** exclusión mutua centralizada. Antes de buscar un ingeniero, el nodo debe adquirir un lock del maestro (`LOCK_REQUEST` → `LOCK_GRANT`). Solo un nodo puede tener el lock a la vez. Mientras nodo1 tiene el lock y asigna ing_A, nodo2 espera. Cuando nodo2 obtiene el lock, ing_A ya está marcado como no disponible y nodo2 elige otro ingeniero.
+
+```
+SIN exclusión mutua:
+  nodo1: busca → ing_A disponible → asigna ← ¡carrera!
+  nodo2: busca → ing_A disponible → asigna ← ¡doble asignación!
+
+CON exclusión mutua:
+  nodo1: lock → busca → ing_A → asigna → marca ocupado → release
+  nodo2: espera... → lock → busca → ing_A ocupado → elige ing_B → release
+```
+
+### Condición de carrera: escrituras concurrentes en la BD
+
+**Problema:** si dos nodos escriben el mismo registro en sus bases locales sin coordinarse, los datos quedan inconsistentes entre nodos.
+
+**Solución:** consenso por quórum. Toda escritura pasa por `PROPOSE → VOTE → COMMIT`. Solo si la mayoría de nodos aprueba, se ejecuta el `COMMIT` en todos. Esto serializa las escrituras y garantiza que todos los nodos apliquen las mismas operaciones en el mismo orden.
+
+---
+
 ## Resumen de decisiones
 
 | Decisión | Elegido | Principal trade-off |
@@ -137,8 +197,10 @@ Esto es coherente con el teorema CAP: al requerir consenso (C), se sacrifica dis
 | Base de datos | SQLite embebido | Sin escrituras concurrentes entre procesos (no aplica aquí) |
 | Distribución | Fragmentación | Lecturas globales requieren broadcast |
 | Consenso | Quórum simple | Sin recuperación de rondas incompletas |
-| Elección de líder | Bully | O(n²) mensajes (irrelevante con 4 nodos) |
+| Elección de líder | Bully inverso (menor ID gana) | O(n²) mensajes (irrelevante con 4 nodos) |
 | Exclusión mutua | Lock centralizado en maestro | Maestro es punto único de falla para el lock |
 | Comunicación | TCP + JSON | Más lento que Protobuf (irrelevante a esta escala) |
 | IDs | Prefijo de nodo + contador | Espacio limitado a 10B IDs por nodo |
 | CAP | Consistencia (CP) | Sistema no acepta escrituras sin quórum |
+| Folio | Concatenación de IDs en BD | Sin comprobante físico fuera de la BD |
+| Colisiones/carreras | IDs con prefijo + mutex + consenso | Tres mecanismos coordinados (complejidad justificada) |

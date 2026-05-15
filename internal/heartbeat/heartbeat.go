@@ -96,10 +96,14 @@ func (m *Monitor) pingOne(ctx context.Context, peer node.Node) {
 	select {
 	case <-ch:
 		// recibimos PONG — nodo vivo, reseteamos el contador de fallos
+		wasAlive := m.state.IsAlive(peer.ID)
 		m.mu.Lock()
 		m.missed[peer.ID] = 0
 		m.mu.Unlock()
 		m.state.MarkAlive(peer.ID)
+		if !wasAlive {
+			m.log.Infof("[heartbeat] node %d (%s) is back alive", peer.ID, peer.Name)
+		}
 	case <-time.After(pongWait):
 		// no llego PONG a tiempo — contamos el fallo
 		m.mu.Lock()
@@ -126,7 +130,12 @@ func (m *Monitor) declareDead(id int) {
 		return // ya estaba declarado muerto, evitamos duplicar acciones
 	}
 	m.state.MarkDead(id)
-	m.log.Warnf("[heartbeat] node %d declared dead", id)
+	n := m.state.NodeByID(id)
+	name := "unknown"
+	if n != nil {
+		name = n.Name
+	}
+	m.log.Warnf("[heartbeat] node %d (%s) declared dead (missed %d pings)", id, name, maxMissed)
 
 	masterID := m.state.GetMasterID()
 	if id == masterID {

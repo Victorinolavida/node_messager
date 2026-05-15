@@ -21,4 +21,4 @@ tidy:
 
 .PHONY: clean
 clean:
-	rm -rf data/ tickets/
+	rm -rf data/

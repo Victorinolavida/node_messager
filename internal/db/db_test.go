@@ -247,11 +247,11 @@ func TestInsertTicketFull_IgnoresDuplicate(t *testing.T) {
 func TestUpdateTicketFolio(t *testing.T) {
 	d := openTestDB(t)
 	id, _ := d.InsertTicket(1, 2, 3, 4)
-	if err := d.UpdateTicketFolio(id, "1-2-3-4.txt"); err != nil {
+	if err := d.UpdateTicketFolio(id, "1-2-3-4"); err != nil {
 		t.Fatal(err)
 	}
 	rows, _ := d.GetTickets()
-	if rows[0].Folio != "1-2-3-4.txt" {
+	if rows[0].Folio != "1-2-3-4" {
 		t.Fatalf("folio not updated: %q", rows[0].Folio)
 	}
 }

@@ -20,8 +20,8 @@ func newLogger(t *testing.T) *zap.SugaredLogger {
 }
 
 // startHub creates a real TCP listener backed by a hub. Returns the node and a
-// channel that receives every raw message delivered to the hub's clients.
-func startHub(t *testing.T, id int, name string) (node.Node, chan []byte) {
+// store that accumulates every message received by the hub.
+func startHub(t *testing.T, id int, name string) (node.Node, *msgstore.Store) {
 	t.Helper()
 	store := msgstore.New(100)
 	log := newLogger(t)
@@ -34,8 +34,6 @@ func startHub(t *testing.T, id int, name string) (node.Node, chan []byte) {
 	}
 	t.Cleanup(func() { ln.Close() })
 
-	// collector: dial the hub so fan-out reaches us
-	recv := make(chan []byte, 64)
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -46,28 +44,9 @@ func startHub(t *testing.T, id int, name string) (node.Node, chan []byte) {
 		}
 	}()
 
-	// dial a reader connection
-	readerConn, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { readerConn.Close() })
-	go func() {
-		buf := make([]byte, 65536)
-		for {
-			n, err := readerConn.Read(buf)
-			if err != nil {
-				return
-			}
-			line := make([]byte, n)
-			copy(line, buf[:n])
-			recv <- line
-		}
-	}()
-
 	port := ln.Addr().(*net.TCPAddr).Port
 	n := node.Node{ID: id, Name: name, Host: "127.0.0.1", Port: port}
-	return n, recv
+	return n, store
 }
 
 func newTestPool(t *testing.T) *Pool {
@@ -77,43 +56,39 @@ func newTestPool(t *testing.T) *Pool {
 	return p
 }
 
-func readMsg(t *testing.T, ch chan []byte, timeout time.Duration) dto.Message {
+func waitForStore(t *testing.T, store *msgstore.Store, want int, timeout time.Duration) []msgstore.Entry {
 	t.Helper()
-	select {
-	case data := <-ch:
-		var m dto.Message
-		// strip trailing newline
-		for len(data) > 0 && (data[len(data)-1] == '\n' || data[len(data)-1] == '\r') {
-			data = data[:len(data)-1]
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		entries, _ := store.Latest(100)
+		if len(entries) >= want {
+			return entries
 		}
-		if err := json.Unmarshal(data, &m); err != nil {
-			t.Fatalf("unmarshal message: %v (raw: %q)", err, data)
-		}
-		return m
-	case <-time.After(timeout):
-		t.Fatal("timeout waiting for message")
-		return dto.Message{}
+		time.Sleep(10 * time.Millisecond)
 	}
+	entries, _ := store.Latest(100)
+	t.Fatalf("timeout: want %d messages in store, got %d", want, len(entries))
+	return nil
 }
 
 func TestPool_Send_DeliversSingleMessage(t *testing.T) {
 	from := node.Node{ID: 99, Name: "sender", Host: "127.0.0.1", Port: 0}
-	to, recv := startHub(t, 1, "target")
+	to, store := startHub(t, 1, "target")
 	pool := newTestPool(t)
 
 	if err := pool.Send(from, to, dto.TypePing, ""); err != nil {
 		t.Fatal(err)
 	}
 
-	msg := readMsg(t, recv, 2*time.Second)
-	if msg.Type != dto.TypePing {
-		t.Fatalf("want TypePing, got %q", msg.Type)
+	entries := waitForStore(t, store, 1, 2*time.Second)
+	if entries[0].Msg.Type != dto.TypePing {
+		t.Fatalf("want TypePing, got %q", entries[0].Msg.Type)
 	}
 }
 
 func TestPool_SendJSON_MarshalsThenSends(t *testing.T) {
 	from := node.Node{ID: 99, Name: "sender"}
-	to, recv := startHub(t, 1, "target")
+	to, store := startHub(t, 1, "target")
 	pool := newTestPool(t)
 
 	payload := dto.ProposePayload{RoundID: "round-xyz", Operation: "INSERT_TICKET", Data: "{}"}
@@ -121,12 +96,12 @@ func TestPool_SendJSON_MarshalsThenSends(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg := readMsg(t, recv, 2*time.Second)
-	if msg.Type != dto.TypePropose {
-		t.Fatalf("want TypePropose, got %q", msg.Type)
+	entries := waitForStore(t, store, 1, 2*time.Second)
+	if entries[0].Msg.Type != dto.TypePropose {
+		t.Fatalf("want TypePropose, got %q", entries[0].Msg.Type)
 	}
 	var p dto.ProposePayload
-	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil {
+	if err := json.Unmarshal([]byte(entries[0].Msg.Content), &p); err != nil {
 		t.Fatalf("unmarshal content: %v", err)
 	}
 	if p.RoundID != "round-xyz" {
@@ -136,8 +111,8 @@ func TestPool_SendJSON_MarshalsThenSends(t *testing.T) {
 
 func TestPool_BroadcastJSON_SendsToAllTargets(t *testing.T) {
 	from := node.Node{ID: 99, Name: "sender"}
-	nodeA, recvA := startHub(t, 1, "nodeA")
-	nodeB, recvB := startHub(t, 2, "nodeB")
+	nodeA, storeA := startHub(t, 1, "nodeA")
+	nodeB, storeB := startHub(t, 2, "nodeB")
 	pool := newTestPool(t)
 
 	errs := pool.BroadcastJSON(from, []node.Node{nodeA, nodeB}, dto.TypePing, struct{}{})
@@ -145,8 +120,8 @@ func TestPool_BroadcastJSON_SendsToAllTargets(t *testing.T) {
 		t.Fatalf("broadcast errors: %v", errs)
 	}
 
-	readMsg(t, recvA, 2*time.Second)
-	readMsg(t, recvB, 2*time.Second)
+	waitForStore(t, storeA, 1, 2*time.Second)
+	waitForStore(t, storeB, 1, 2*time.Second)
 }
 
 func TestPool_Broadcast_ErrorForUnreachableNode(t *testing.T) {

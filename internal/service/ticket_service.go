@@ -12,7 +12,6 @@ import (
 	"node_messager/internal/db"
 	"node_messager/internal/mutex"
 	"node_messager/internal/nodestate"
-	"node_messager/internal/ticketfile"
 	"node_messager/pkg/dto"
 	"node_messager/pkg/node"
 	"node_messager/pkg/sender"
@@ -247,11 +246,7 @@ func (s *TicketService) raiseTicket(ctx context.Context, idUsuario, idDispositiv
 		return fmt.Errorf("consensus insert ticket: %w", err)
 	}
 
-	// write folio file
-	folio, err := ticketfile.Write(idUsuario, chosen.ID, s.self.ID, int64(ticketID))
-	if err != nil {
-		s.log.Warnf("[service] write ticket file: %v", err)
-	}
+	folio := fmt.Sprintf("%d-%d-%d-%d", idUsuario, chosen.ID, s.self.ID, ticketID)
 
 	// persist folio in DB via consensus
 	type folioUpdate struct {
@@ -368,7 +363,11 @@ func (s *TicketService) ListAll(ctx context.Context, table string) ([]any, error
 	}
 	// embed query ID in the table field so responders can route back
 	p.Table = queryID + "|" + table
-	s.pool.BroadcastJSON(s.self, peers, dto.TypeQuery, p)
+	if errs := s.pool.BroadcastJSON(s.self, peers, dto.TypeQuery, p); len(errs) > 0 {
+		for id, err := range errs {
+			s.log.Warnf("[service] query broadcast to node %d failed: %v", id, err)
+		}
+	}
 
 	// collect local rows
 	local, err := s.localRows(table)
@@ -423,9 +422,12 @@ func (s *TicketService) HandleQuery(msg dto.Message) {
 
 	requester := s.state.NodeByID(p.RequesterID)
 	if requester == nil {
+		s.log.Warnf("[service] handle query: requester node %d not found", p.RequesterID)
 		return
 	}
-	_ = s.pool.SendJSON(s.self, *requester, dto.TypeQueryResponse, resp)
+	if err := s.pool.SendJSON(s.self, *requester, dto.TypeQueryResponse, resp); err != nil {
+		s.log.Warnf("[service] handle query: send response to node %d: %v", p.RequesterID, err)
+	}
 }
 
 // HandleQueryResponse recibe la respuesta de un peer y la agrega al queryCollector

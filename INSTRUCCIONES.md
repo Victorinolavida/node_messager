@@ -29,7 +29,7 @@ go version
 
 ```bash
 git clone <repo>
-cd websockets_go
+cd node_messager
 go mod tidy
 go run ./cmd
 ```
@@ -186,7 +186,7 @@ Adquiere lock → busca ingeniero disponible → consenso → genera folio:
   raising ticket (acquiring lock + consensus)...
   ✓ ticket raised
 ```
-Folio generado: `tickets/IDUSUARIO-IDINGENIERO-IDSUCURSAL-IDTICKET.txt`
+Folio generado: `IDUSUARIO-IDINGENIERO-IDSUCURSAL-IDTICKET` (almacenado en la BD)
 
 ### 4. Cerrar ticket
 ```
@@ -227,8 +227,6 @@ logs/
   sucursal1.log     ← logs del servidor TCP
 messages/
   sucursal1.jsonl   ← historial de mensajes
-tickets/
-  1-2-1-100.txt     ← folios (USUARIO-INGENIERO-SUCURSAL-TICKET)
 ```
 
 Todos estos directorios son creados automáticamente y están en `.gitignore`.
@@ -247,6 +245,6 @@ El sistema opera con **4 sucursales**. El array `nodes` es idéntico en todas la
 make run-dev         # modo local (4 nodos en un proceso)
 make run             # modo VM (nodes.json ya configurado)
 make test            # correr tests
-make clean           # limpiar data/ y tickets/
+make clean           # limpiar data/
 go mod tidy          # actualizar dependencias
 ```

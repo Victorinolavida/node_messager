@@ -91,17 +91,6 @@ func (h *Hub) Run() {
 			if h.dispatcher != nil {
 				go h.dispatcher.Dispatch(msg)
 			}
-
-			// reenviamos el mensaje a todos los clientes conectados (fan-out)
-			for c := range h.clients {
-				select {
-				case c.send <- data:
-				default:
-					// el canal del cliente esta lleno — lo desconectamos
-					close(c.send)
-					delete(h.clients, c)
-				}
-			}
 		}
 	}
 }
