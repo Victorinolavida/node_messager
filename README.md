@@ -68,7 +68,6 @@ bash setup.sh 2
 data/<sucursal>.db        SQLite por nodo (gitignored)
 logs/<sucursal>.log       Logs TCP (gitignored)
 messages/<sucursal>.jsonl Historial mensajes (gitignored)
-tickets/<folio>.txt       Folios de tickets (gitignored)
 ```
 
 ## Tests

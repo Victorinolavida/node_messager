@@ -12,7 +12,6 @@ import (
 	"node_messager/internal/db"
 	"node_messager/internal/mutex"
 	"node_messager/internal/nodestate"
-	"node_messager/internal/ticketfile"
 	"node_messager/pkg/dto"
 	"node_messager/pkg/node"
 	"node_messager/pkg/sender"
@@ -247,11 +246,7 @@ func (s *TicketService) raiseTicket(ctx context.Context, idUsuario, idDispositiv
 		return fmt.Errorf("consensus insert ticket: %w", err)
 	}
 
-	// write folio file
-	folio, err := ticketfile.Write(idUsuario, chosen.ID, s.self.ID, int64(ticketID))
-	if err != nil {
-		s.log.Warnf("[service] write ticket file: %v", err)
-	}
+	folio := fmt.Sprintf("%d-%d-%d-%d", idUsuario, chosen.ID, s.self.ID, ticketID)
 
 	// persist folio in DB via consensus
 	type folioUpdate struct {

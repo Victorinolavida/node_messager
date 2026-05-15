@@ -9,7 +9,7 @@ Este documento explica cómo el sistema resuelve los cuatro problemas clásicos 
 1. [Problema 1 — Consistencia: Consenso por Quórum](#1-consenso-por-quórum)
 2. [Problema 2 — Exclusión Mutua: Lock Centralizado](#2-exclusión-mutua)
 3. [Problema 3 — Tolerancia a Fallas: Heartbeat y Redistribución](#3-heartbeat-y-redistribución)
-4. [Problema 4 — Elección de Líder: Algoritmo Bully](#4-algoritmo-bully)
+4. [Problema 4 — Elección de Líder: Algoritmo Bully (inverso)](#4-algoritmo-bully-inverso)
 5. [Cómo se crea un ticket (flujo completo)](#5-flujo-completo-creación-de-ticket)
 6. [Identificadores distribuidos](#6-identificadores-distribuidos)
 7. [Consultas distribuidas](#7-consultas-distribuidas)
@@ -245,57 +245,58 @@ internal/service/ticket_service.go
 
 ---
 
-## 4. Algoritmo Bully
+## 4. Algoritmo Bully (inverso)
 
 ### Problema
 Si el nodo maestro cae, nadie gestiona el lock de exclusión mutua ni coordina la redistribución de tickets.
 
-### Solución: Bully algorithm
+### Solución: Bully algorithm (inverso)
 
-El nodo con el **mayor ID** entre los activos se convierte en el nuevo maestro.
+El nodo con el **menor ID** entre los activos se convierte en el nuevo maestro. Es una variante del algoritmo Bully clásico donde la prioridad es inversa: menor ID = mayor prioridad.
 
 ### Regla simple
 ```
-"El que tiene mayor ID gana (bully = matón)"
-Si soy el mayor activo → soy el maestro
-Si hay alguien mayor que yo → que él se encargue
+"El que tiene menor ID gana (mayor prioridad)"
+Si soy el menor activo → soy el maestro
+Si hay alguien menor que yo → que él se encargue
 ```
 
 ### Flujo completo
 
 ```
 nodo1 (maestro, ID=1) cae.
-nodo2 (ID=2) detecta que nodo1 no responde:
+nodo3 (ID=3) detecta que nodo1 no responde:
 
-Paso 1 — nodo2 inicia elección
-  nodo2 envía ELECTION a todos con ID > 2:
-  nodo2 ──ELECTION──► nodo3  { candidate_id: 2 }
+Paso 1 — nodo3 inicia elección
+  nodo3 envía ELECTION a todos con ID < 3 (mayor prioridad):
+  nodo3 ──ELECTION──► nodo2  { candidate_id: 3 }
 
-Paso 2 — nodo3 (ID=3 > 2) responde y toma el relevo
-  nodo3 ──ELECTION_OK──► nodo2  (dice: "yo me encargo")
-  nodo2 cancela su timer → no declara victoria
+Paso 2 — nodo2 (ID=2 < 3) tiene mayor prioridad → responde OK
+  nodo2 ──ELECTION_OK──► nodo3  (dice: "yo me encargo")
+  nodo3 cancela su timer → se retira
 
-Paso 3 — nodo3 inicia su propia elección
-  nodo3 envía ELECTION a todos con ID > 3:
-  (no hay nadie) → espera 3s sin respuesta
+Paso 3 — nodo2 inicia su propia elección
+  nodo2 envía ELECTION a todos con ID < 2:
+  (nodo1 está caído, nadie responde) → espera 3s sin respuesta
 
-Paso 4 — nodo3 se declara ganador
-  nodo3 ──COORDINATOR──► nodo2  { master_id: 3 }
-  nodo2 actualiza masterID = 3
+Paso 4 — nodo2 se declara ganador (menor ID activo)
+  nodo2 ──COORDINATOR──► nodo3  { master_id: 2 }
+  nodo3 actualiza masterID = 2
 
-Resultado: nodo3 es el nuevo maestro.
+Resultado: nodo2 es el nuevo maestro.
   - Gestiona el lock de mutex
   - Redistribuye tickets de nodo1
   - Responde como maestro a futuros LOCK_REQUEST
 ```
 
-### Caso: todos tienen el mismo ID de proceso
+### Caso: único candidato
 
 ```
-Único candidato (solo queda un nodo):
-  nodo3 no recibe ELECTION_OK en 3s
-  nodo3 ──COORDINATOR──► (broadcast a todos vivos)
-  nodo3 es el maestro
+Solo queda un nodo activo (nodo4):
+  nodo4 envía ELECTION a nodos con ID < 4 → ninguno responde
+  nodo4 no recibe ELECTION_OK en 3s
+  nodo4 ──COORDINATOR──► (broadcast a todos vivos)
+  nodo4 es el maestro
 ```
 
 ### Timeout de elección
@@ -303,8 +304,8 @@ Resultado: nodo3 es el nuevo maestro.
 ```
 Timeout de respuesta ELECTION_OK: 3 segundos
 
-Si en 3s nadie con ID mayor responde:
-  → yo soy el mayor activo → me declaro maestro
+Si en 3s nadie con ID menor responde:
+  → yo soy el menor activo → me declaro maestro
   → envío COORDINATOR a todos
 ```
 
@@ -312,12 +313,12 @@ Si en 3s nadie con ID mayor responde:
 
 ```
 internal/election/election.go
-  Engine.StartElection()    — inicia Bully, envía ELECTION a nodos mayores
+  Engine.StartElection()    — inicia Bully inverso, envía ELECTION a nodos con ID menor
   Engine.declareVictory()   — me declaro maestro, envío COORDINATOR
-  Engine.HandleElection()   — recibo ELECTION: si soy mayor, respondo OK y compito
-  Engine.HandleElectionOK() — alguien mayor está activo → cancelo timer → me retiro
+  Engine.HandleElection()   — recibo ELECTION: si tengo menor ID, respondo OK y compito
+  Engine.HandleElectionOK() — alguien con menor ID está activo → cancelo timer → me retiro
   Engine.HandleCoordinator()— actualizo masterID con el ganador
-  Engine.higherNodes()      — filtra nodos con ID > self.ID
+  Engine.lowerNodes()       — filtra nodos con ID < self.ID
 ```
 
 ---
@@ -371,9 +372,8 @@ Esta sección muestra paso a paso qué ocurre cuando un usuario levanta un ticke
     (s=2 == self) ✓    │                    │                    │
                        │                    │                    │
 [5] Generar folio      │                    │                    │
-    archivo = "10-{id_ing_A}-2-10_000_000_001.txt"              │
-    escribe en disco:  │                    │                    │
-    tickets/10-{id_ing_A}-2-10_000_000_001.txt                  │
+    folio = "10-{id_ing_A}-2-10_000_000_001"                    │
+    (concatenación de IDs, almacenado en BD)                    │
                        │                    │                    │
 [6] Consenso — UPDATE_TICKET_FOLIO         │                    │
     ──PROPOSE──────────────────────────────►│                    │
@@ -404,19 +404,10 @@ Esta sección muestra paso a paso qué ocurre cuando un usuario levanta un ticke
 sucursal2.db:
   TICKETS: id=10_000_000_001, usuario=10, ingeniero=ing_A,
            sucursal=2, dispositivo=20, estado=ABIERTO,
-           folio="10-...-2-10000000001.txt"
+           folio="10-{id_ing_A}-2-10000000001"
 
 sucursal1.db:
   INGENIEROS: ing_A.disponible = 0  (marca que está asignado)
-
-disco (sucursal2):
-  tickets/10-{id_ing_A}-2-10000000001.txt
-    FOLIO: 10-{id_ing_A}-2-10000000001.txt
-    Usuario: 10
-    Ingeniero: {id_ing_A}
-    Sucursal: 2
-    Ticket: 10000000001
-    Fecha: 2026-05-06T18:30:00Z
 ```
 
 ### Cierre de ticket
@@ -551,6 +542,6 @@ Si un nodo tarda o no responde:
 | **Quórum** | Mayoría de nodos vivos necesaria para aprobar una escritura |
 | **Commit handler** | Función que aplica la operación en SQLite local cuando llega COMMIT |
 | **Fragmentación** | Cada nodo guarda solo sus filas (`sucursal_id = self.ID`) |
-| **Bully** | Algoritmo de elección: gana el nodo con mayor ID |
+| **Bully (inverso)** | Algoritmo de elección: gana el nodo con menor ID (mayor prioridad) |
 | **Holder** | Nodo que actualmente tiene el lock de exclusión mutua |
-| **Folio** | Archivo de texto generado al crear un ticket: `USUARIO-INGENIERO-SUCURSAL-TICKET.txt` |
+| **Folio** | Identificador concatenado del ticket: `USUARIO-INGENIERO-SUCURSAL-TICKET`, almacenado en la BD |

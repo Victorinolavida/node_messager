@@ -53,8 +53,7 @@ Escucha conexiones entrantes en el puerto configurado. Por cada conexión acepta
 
 Gestiona todos los clientes TCP conectados. Cuando llega un mensaje:
 1. Lo guarda en el store de mensajes (historial JSONL)
-2. Llama al **Dispatcher** de forma asíncrona
-3. Reenvía el mensaje a todos los clientes conectados (fan-out)
+2. Llama al **Dispatcher** de forma asíncrona para enrutarlo al motor correcto
 
 ### 3. Dispatcher (`internal/dispatcher`)
 
@@ -122,26 +121,26 @@ Nodo 2 (quiere asignar)          Maestro (nodo 1)
 
 Si el lock está ocupado cuando llega una petición: el maestro encola la petición y responde `LOCK_DENY`. Cuando el lock se libera, el maestro envía `LOCK_GRANT` al siguiente en la cola automáticamente.
 
-### Elección de líder (Algoritmo Bully)
+### Elección de líder (Algoritmo Bully inverso)
 
-Cuando el maestro no responde a los heartbeats, el nodo que lo detecta inicia una elección. El nodo con el mayor ID entre los activos gana.
+Cuando el maestro no responde a los heartbeats, el nodo que lo detecta inicia una elección. El nodo con el **menor ID** entre los activos gana (Bully inverso — menor ID = mayor prioridad).
 
 ```
-Nodo 2 detecta que nodo 1 (maestro) está caído:
+Nodo 1 (maestro) cae. Nodo 3 detecta:
 
-Nodo 2                   Nodo 3
+Nodo 3                   Nodo 2
   │                         │
-  │──── ELECTION ──────────►│   (nodo 3 tiene ID mayor)
+  │──── ELECTION ──────────►│   (nodo 2 tiene ID menor = mayor prioridad)
   │                         │
-  │◄─── ELECTION_OK ────────│   (nodo 3 dice "yo me encargo")
+  │◄─── ELECTION_OK ────────│   (nodo 2 dice "yo me encargo")
   │                         │
-  │                         │──── ELECTION ────► (no hay nodos con ID > 3)
+  │  cancela timer          │──── ELECTION ────► (no hay nodos con ID < 2 vivos)
   │                         │
   │                         │   (declara victoria — 3s sin respuesta)
   │                         │
-  │◄─── COORDINATOR ────────│   (nodo 3 es el nuevo maestro)
+  │◄─── COORDINATOR ────────│   (nodo 2 es el nuevo maestro)
   │                         │
-  │  actualiza masterID=3   │
+  │  actualiza masterID=2   │
 ```
 
 ### Heartbeat (detección de fallas)
@@ -187,10 +186,10 @@ Usuario en sucursal2:
      - sucursal3: no inserta (sucursal_id=2 ≠ 3)
 
 4. GENERAR FOLIO
-   crea archivo: tickets/5-ing1-2-X.txt
+   folio = "5-ing1-2-X" (concatenación de IDs)
 
 5. CONSENSO — GUARDAR FOLIO
-   sucursal2 ──PROPOSE(UPDATE_TICKET_FOLIO, {id=X, folio="5-ing1-2-X.txt"})──► todos
+   sucursal2 ──PROPOSE(UPDATE_TICKET_FOLIO, {id=X, folio="5-ing1-2-X"})──► todos
    todos ──VOTE_YES──► sucursal2
    sucursal2 ──COMMIT──► todos
    cada nodo actualiza si tiene el ticket
@@ -236,10 +235,10 @@ Cualquier sucursal:
   CLI → AddDevice(nombre="Laptop-001", tipo="Laptop")
 
 Si self es maestro:
-  1. Consulta DISPOSITIVOS a todos → cuenta dispositivos por sucursal
-  2. Elige la sucursal con menos dispositivos (sucursal_id = target)
-  3. CONSENSO — INSERT_DISPOSITIVO con sucursal_id=target
-  4. Solo target inserta en su SQLite
+  1. Consulta INGENIEROS y DISPOSITIVOS a todos los nodos
+  2. Elige el ingeniero con menos dispositivos asignados
+  3. CONSENSO — INSERT_DISPOSITIVO con sucursal_id = sucursal del ingeniero elegido
+  4. Solo ese nodo inserta en su SQLite
 
 Si self NO es maestro:
   1. Envía ADD_DEVICE al maestro
@@ -279,13 +278,14 @@ sucursal2 detecta via heartbeat:
   missed[1] = 3 → declarar muerto
   id muerto == masterID → iniciar elección
 
-Bully entre sucursal2 (id=2) y sucursal3 (id=3):
-  sucursal2 envía ELECTION a sucursal3
-  sucursal3 responde ELECTION_OK
-  sucursal3 se declara ganadora → envía COORDINATOR a sucursal2
-  sucursal2 actualiza masterID=3
+Bully inverso entre sucursal2 (id=2) y sucursal3 (id=3):
+  sucursal3 envía ELECTION a sucursal2 (ID menor = mayor prioridad)
+  sucursal2 responde ELECTION_OK → inicia su propia elección
+  sucursal2 envía ELECTION a nodos con ID < 2 → ninguno vivo
+  sucursal2 se declara ganador → envía COORDINATOR a sucursal3
+  sucursal3 actualiza masterID=2
 
-Ahora sucursal3 es el nuevo maestro:
+Ahora sucursal2 es el nuevo maestro:
   - Gestiona locks de mutex
   - Redistribuye tickets de sucursal1
   - Responde heartbeats como maestro
@@ -311,7 +311,7 @@ _schema_version (version)   ← control de migraciones
 Al iniciar, `db.Open()` verifica la versión en `_schema_version` y aplica las migraciones pendientes en orden. Al arrancar se imprime:
 
 ```
-[sucursal1] db schema version: 1
+[sucursal1] db schema version: 2
 ```
 
 Para agregar cambios al esquema: agregar entrada al slice `migrations` en `internal/db/db.go` con el siguiente número de versión.
@@ -320,19 +320,13 @@ Para agregar cambios al esquema: agregar entrada al slice `migrations` en `inter
 
 ## Folio de ticket
 
-Formato del nombre de archivo: `IDUSUARIO-IDINGENIERO-IDSUCURSAL-IDTICKET.txt`
+El folio es una concatenación de IDs que se almacena en la columna `folio` de la tabla TICKETS en la base de datos.
 
-Ejemplo: `5-101-2-987654321.txt`
+Formato: `IDUSUARIO-IDINGENIERO-IDSUCURSAL-IDTICKET`
 
-Contenido:
-```
-FOLIO: 5-101-2-987654321.txt
-Usuario: 5
-Ingeniero: 101
-Sucursal: 2
-Ticket: 987654321
-Fecha: 2026-05-06T18:30:00Z
-```
+Ejemplo: `5-101-2-987654321`
+
+El folio se genera al crear el ticket y se persiste vía consenso (`UPDATE_TICKET_FOLIO`). Es visible al listar tickets (opción 9 del menú).
 
 ---
 
@@ -352,41 +346,42 @@ Todos los mensajes tienen la estructura:
 
 | Categoría | Tipos |
 |-----------|-------|
-| Mensajería legacy | `MSG`, `BROADCAST` |
+| Mensajería | `MSG`, `BROADCAST` |
 | Heartbeat | `PING`, `PONG` |
-| Consenso | `PROPOSE`, `VOTE_YES`, `VOTE_NO`, `COMMIT`, `COMMIT_ACK` |
+| Consenso | `PROPOSE`, `VOTE_YES`, `VOTE_NO`, `COMMIT` |
 | Exclusión mutua | `LOCK_REQUEST`, `LOCK_GRANT`, `LOCK_RELEASE`, `LOCK_DENY` |
 | Elección | `ELECTION`, `ELECTION_OK`, `COORDINATOR` |
 | Consultas | `QUERY`, `QUERY_RESPONSE` |
-| Dispositivos | `ADD_DEVICE`, `DISTRIBUTE` |
-| Tickets | `ASSIGN_TICKET`, `CLOSE_TICKET` |
-| Fallas | `NODE_DEAD`, `REDISTRIBUTE` |
+| Dispositivos | `ADD_DEVICE` |
+| Fallas | `NODE_DEAD` |
 
 ---
 
 ## Configuración de nodos (`nodes.json`)
 
-**Dev local (1 máquina, 3 nodos en el mismo proceso):**
+**Dev local (1 máquina, 4 nodos en el mismo proceso — sin `host_id`):**
 ```json
 {
   "master_id": 1,
   "nodes": [
     { "id": 1, "name": "sucursal1", "host": "localhost", "port": 5001 },
     { "id": 2, "name": "sucursal2", "host": "localhost", "port": 5002 },
-    { "id": 3, "name": "sucursal3", "host": "localhost", "port": 5003 }
+    { "id": 3, "name": "sucursal3", "host": "localhost", "port": 5003 },
+    { "id": 4, "name": "sucursal4", "host": "localhost", "port": 5004 }
   ]
 }
 ```
 
-**VMs (1 proceso por máquina) — campo `host` diferente en cada VM:**
+**VMs (1 proceso por máquina) — solo cambia `host_id` en cada VM:**
 ```json
 {
   "master_id": 1,
+  "host_id": 2,
   "nodes": [
-    { "id": 1, "name": "sucursal1", "host": "192.168.x.10", "port": 5001 },
-    { "id": 2, "name": "sucursal2", "host": "192.168.x.11", "port": 5001 },
-    { "id": 3, "name": "sucursal3", "host": "192.168.x.12", "port": 5001 }
-  ],
-  "host": { "id": 2, "name": "sucursal2", "host": "0.0.0.0", "port": 5001 }
+    { "id": 1, "name": "sucursal1", "host": "192.168.100.102", "port": 5001 },
+    { "id": 2, "name": "sucursal2", "host": "192.168.100.103", "port": 5001 },
+    { "id": 3, "name": "sucursal3", "host": "192.168.100.104", "port": 5001 },
+    { "id": 4, "name": "sucursal4", "host": "192.168.100.105", "port": 5001 }
+  ]
 }
 ```
