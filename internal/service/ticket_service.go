@@ -391,7 +391,10 @@ func (s *TicketService) ListAll(ctx context.Context, table string) ([]any, error
 	if len(peers) > 0 {
 		select {
 		case <-col.done:
+			s.log.Infof("[service] query %s: recibidas %d/%d respuestas", table, len(col.results), col.expected)
 		case <-time.After(queryTimeout):
+			s.log.Warnf("[service] query %s: timeout — solo %d/%d respuestas recibidas, verifica conectividad entre nodos",
+				table, len(col.results), col.expected)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -453,7 +456,10 @@ func (s *TicketService) HandleQueryResponse(msg dto.Message) {
 
 	s.queryMu.Lock()
 	col, ok := s.queryWait[queryID]
-	if ok {
+	if !ok {
+		s.log.Warnf("[service] query_response: queryID %q no encontrado — respuesta tarde o routing incorrecto (from=%s)",
+			queryID, msg.FromNode)
+	} else {
 		col.results = append(col.results, p)
 		if len(col.results) >= col.expected {
 			select {
