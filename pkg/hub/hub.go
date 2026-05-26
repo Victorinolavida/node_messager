@@ -87,6 +87,12 @@ func (h *Hub) Run() {
 			h.log.Infof("[%s] recv  type=%s from=%s to=%s id=%s — %q",
 				h.name, msg.Type, msg.FromNode, msg.ToNode, msg.ID, msg.Content)
 
+			// si el mensaje llega al nodo incorrecto, es señal de que las IPs en nodes.json estan mal
+			if msg.ToNode != "" && msg.ToNode != h.name {
+				h.log.Warnf("[%s] ROUTING ERROR: mensaje to=%s llego a este nodo — verifica IPs en nodes.json",
+					h.name, msg.ToNode)
+			}
+
 			// mandamos el mensaje al dispatcher para que lo procese segun su tipo
 			if h.dispatcher != nil {
 				go h.dispatcher.Dispatch(msg)

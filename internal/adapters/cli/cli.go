@@ -414,23 +414,38 @@ func Run(nodes []node.Node, stores map[int]*msgstore.Store, hostNode *node.Node,
 			separator()
 			fmt.Println("  close ticket")
 			separator()
-			idTicketStr := prompt(rl, "  ticket ID: ")
-			idTicket, err := strconv.ParseInt(idTicketStr, 10, 64)
+			rows, err := svc.ListAll(ctx, "TICKETS")
 			if err != nil {
-				fmt.Printf("  invalid ticket ID: %v\n", err)
+				fmt.Printf("  error listing tickets: %v\n", err)
 				continue
 			}
-			idIngenieroStr := prompt(rl, "  ingeniero ID: ")
-			idIngeniero, err := strconv.Atoi(idIngenieroStr)
-			if err != nil {
-				fmt.Printf("  invalid ingeniero ID: %v\n", err)
+			var open []dto.TicketRow
+			for _, r := range rows {
+				if t, ok := r.(dto.TicketRow); ok && t.Estado == "ABIERTO" {
+					open = append(open, t)
+				}
+			}
+			if len(open) == 0 {
+				fmt.Println("  no open tickets")
 				continue
+			}
+			fmt.Printf("  %-4s  %-14s  %-10s  %-10s  %s\n", "#", "TICKET ID", "INGENIERO", "DISPOSITIVO", "FOLIO")
+			for i, t := range open {
+				fmt.Printf("  %-4d  %-14d  %-10d  %-10d  %s\n", i+1, t.ID, t.IDIngeniero, t.IDDispositivo, t.Folio)
 			}
 			separator()
-			if err := svc.CloseTicket(ctx, idTicket, idIngeniero); err != nil {
+			raw := prompt(rl, "  selecciona # ticket: ")
+			idx, err := strconv.Atoi(raw)
+			if err != nil || idx < 1 || idx > len(open) {
+				fmt.Println("  selección inválida")
+				continue
+			}
+			selected := open[idx-1]
+			separator()
+			if err := svc.CloseTicket(ctx, int64(selected.ID), selected.IDIngeniero); err != nil {
 				fmt.Printf("  error: %v\n", err)
 			} else {
-				fmt.Println("  ✓ ticket closed")
+				fmt.Printf("  ✓ ticket %d cerrado\n", selected.ID)
 			}
 
 		case "9", "tickets":

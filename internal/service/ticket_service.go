@@ -34,6 +34,20 @@ func newID(nodeID int) int {
 	return nodeID*10_000_000_000 + int(n)
 }
 
+// SetMinIDCounter asegura que el contador arranque despues del ultimo ID del seed
+// evita que newID genere IDs que ya existen en la base de datos
+func SetMinIDCounter(min int64) {
+	for {
+		cur := atomic.LoadInt64(&idCounter)
+		if cur >= min {
+			return
+		}
+		if atomic.CompareAndSwapInt64(&idCounter, cur, min) {
+			return
+		}
+	}
+}
+
 type TicketService struct {
 	self      node.Node
 	state     *nodestate.State
@@ -363,8 +377,20 @@ func (s *TicketService) ListAll(ctx context.Context, table string) ([]any, error
 	}
 	// embed query ID in the table field so responders can route back
 	p.Table = queryID + "|" + table
-	if errs := s.pool.BroadcastJSON(s.self, peers, dto.TypeQuery, p); len(errs) > 0 {
-		for id, err := range errs {
+	if broadcastErrs := s.pool.BroadcastJSON(s.self, peers, dto.TypeQuery, p); len(broadcastErrs) > 0 {
+		// ajustamos expected por los nodos que no recibieron el query
+		// si no lo hacemos, esperamos hasta timeout por respuestas que nunca llegan
+		s.queryMu.Lock()
+		col.expected -= len(broadcastErrs)
+		if len(col.results) >= col.expected {
+			select {
+			case <-col.done:
+			default:
+				close(col.done)
+			}
+		}
+		s.queryMu.Unlock()
+		for id, err := range broadcastErrs {
 			s.log.Warnf("[service] query broadcast to node %d failed: %v", id, err)
 		}
 	}
@@ -379,7 +405,10 @@ func (s *TicketService) ListAll(ctx context.Context, table string) ([]any, error
 	if len(peers) > 0 {
 		select {
 		case <-col.done:
+			s.log.Infof("[service] query %s: recibidas %d/%d respuestas", table, len(col.results), col.expected)
 		case <-time.After(queryTimeout):
+			s.log.Warnf("[service] query %s: timeout — solo %d/%d respuestas recibidas, verifica conectividad entre nodos",
+				table, len(col.results), col.expected)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -441,7 +470,10 @@ func (s *TicketService) HandleQueryResponse(msg dto.Message) {
 
 	s.queryMu.Lock()
 	col, ok := s.queryWait[queryID]
-	if ok {
+	if !ok {
+		s.log.Warnf("[service] query_response: queryID %q no encontrado — respuesta tarde o routing incorrecto (from=%s)",
+			queryID, msg.FromNode)
+	} else {
 		col.results = append(col.results, p)
 		if len(col.results) >= col.expected {
 			select {
