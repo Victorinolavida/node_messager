@@ -45,16 +45,23 @@ func LoadSeedData(path string) (SeedData, error) {
 }
 
 // Seed inserta datos iniciales solo para el nodo indicado. Omite si el nodo ya tiene datos.
-func (d *DB) Seed(nodeID int, data SeedData) error {
+// Retorna el mayor contador usado en los IDs del seed para que el runtime no colisione.
+func (d *DB) Seed(nodeID int, data SeedData) (int64, error) {
 	if n, err := d.CountIngenieros(); err != nil || n > 0 {
-		return err
+		return 0, err
 	}
+	var maxCounter int64
+	offset := int64(nodeID) * 10_000_000_000
+
 	for _, r := range data.Ingenieros {
 		if r.SucursalID != nodeID {
 			continue
 		}
 		if err := d.InsertIngeniero(r.ID, r.Nombre, r.SucursalID); err != nil {
-			return fmt.Errorf("seed ingeniero %d: %w", r.ID, err)
+			return 0, fmt.Errorf("seed ingeniero %d: %w", r.ID, err)
+		}
+		if c := int64(r.ID) - offset; c > maxCounter {
+			maxCounter = c
 		}
 	}
 	for _, r := range data.Usuarios {
@@ -62,7 +69,10 @@ func (d *DB) Seed(nodeID int, data SeedData) error {
 			continue
 		}
 		if err := d.InsertUsuario(r.ID, r.Nombre, r.SucursalID); err != nil {
-			return fmt.Errorf("seed usuario %d: %w", r.ID, err)
+			return 0, fmt.Errorf("seed usuario %d: %w", r.ID, err)
+		}
+		if c := int64(r.ID) - offset; c > maxCounter {
+			maxCounter = c
 		}
 	}
 	for _, r := range data.Dispositivos {
@@ -70,8 +80,11 @@ func (d *DB) Seed(nodeID int, data SeedData) error {
 			continue
 		}
 		if err := d.InsertDispositivo(r.ID, r.Nombre, r.Tipo, r.SucursalID, r.IngenieroID); err != nil {
-			return fmt.Errorf("seed dispositivo %d: %w", r.ID, err)
+			return 0, fmt.Errorf("seed dispositivo %d: %w", r.ID, err)
+		}
+		if c := int64(r.ID) - offset; c > maxCounter {
+			maxCounter = c
 		}
 	}
-	return nil
+	return maxCounter, nil
 }

@@ -101,8 +101,12 @@ func main() {
 			startupLog.Infof("[%s] db schema version: %d", n.Name, v)
 		}
 		if seedData, err := db.LoadSeedData("seed.json"); err == nil {
-			if err := nodeDB.Seed(n.ID, seedData); err != nil {
+			maxCounter, err := nodeDB.Seed(n.ID, seedData)
+			if err != nil {
 				startupLog.Fatalf("[%s] seed db: %v", n.Name, err)
+			}
+			if maxCounter > 0 {
+				service.SetMinIDCounter(maxCounter)
 			}
 		}
 

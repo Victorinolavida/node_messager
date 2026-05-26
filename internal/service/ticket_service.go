@@ -34,6 +34,20 @@ func newID(nodeID int) int {
 	return nodeID*10_000_000_000 + int(n)
 }
 
+// SetMinIDCounter asegura que el contador arranque despues del ultimo ID del seed
+// evita que newID genere IDs que ya existen en la base de datos
+func SetMinIDCounter(min int64) {
+	for {
+		cur := atomic.LoadInt64(&idCounter)
+		if cur >= min {
+			return
+		}
+		if atomic.CompareAndSwapInt64(&idCounter, cur, min) {
+			return
+		}
+	}
+}
+
 type TicketService struct {
 	self      node.Node
 	state     *nodestate.State
