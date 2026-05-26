@@ -100,6 +100,11 @@ func main() {
 		if v, err := nodeDB.Version(); err == nil {
 			startupLog.Infof("[%s] db schema version: %d", n.Name, v)
 		}
+		if seedData, err := db.LoadSeedData("seed.json"); err == nil {
+			if err := nodeDB.Seed(n.ID, seedData); err != nil {
+				startupLog.Fatalf("[%s] seed db: %v", n.Name, err)
+			}
+		}
 
 		ns := nodestate.New(n, cfg.Nodes, cfg.MasterID)
 		pool := sender.NewPool(nodeLog)

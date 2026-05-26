@@ -363,8 +363,20 @@ func (s *TicketService) ListAll(ctx context.Context, table string) ([]any, error
 	}
 	// embed query ID in the table field so responders can route back
 	p.Table = queryID + "|" + table
-	if errs := s.pool.BroadcastJSON(s.self, peers, dto.TypeQuery, p); len(errs) > 0 {
-		for id, err := range errs {
+	if broadcastErrs := s.pool.BroadcastJSON(s.self, peers, dto.TypeQuery, p); len(broadcastErrs) > 0 {
+		// ajustamos expected por los nodos que no recibieron el query
+		// si no lo hacemos, esperamos hasta timeout por respuestas que nunca llegan
+		s.queryMu.Lock()
+		col.expected -= len(broadcastErrs)
+		if len(col.results) >= col.expected {
+			select {
+			case <-col.done:
+			default:
+				close(col.done)
+			}
+		}
+		s.queryMu.Unlock()
+		for id, err := range broadcastErrs {
 			s.log.Warnf("[service] query broadcast to node %d failed: %v", id, err)
 		}
 	}
