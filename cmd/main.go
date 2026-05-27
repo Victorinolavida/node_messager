@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -79,8 +78,9 @@ func main() {
 
 	nodeLogs := make(map[int]*zap.SugaredLogger, len(serveNodes))
 	nodeServices := make(map[int]*service.TicketService, len(serveNodes))
+	var nodeDbs []*db.DB
+	var readyChs []<-chan struct{}
 
-	var wg sync.WaitGroup
 	for _, n := range serveNodes {
 		n := n
 
@@ -97,6 +97,7 @@ func main() {
 		if err != nil {
 			startupLog.Fatalf("[%s] open db: %v", n.Name, err)
 		}
+		nodeDbs = append(nodeDbs, nodeDB)
 		if v, err := nodeDB.Version(); err == nil {
 			startupLog.Infof("[%s] db schema version: %d", n.Name, v)
 		}
@@ -136,11 +137,10 @@ func main() {
 			}(elecEngine)
 		}
 
-		wg.Add(1)
 		srv := tcpserver.New(n, stores[n.ID])
 		srv.SetDispatcher(disp)
+		readyChs = append(readyChs, srv.Ready)
 		go func() {
-			wg.Done()
 			if err := srv.Start(nodeCtx); err != nil {
 				nodeLog.Errorf("[%s] server error: %s", n.Name, err)
 			}
@@ -148,7 +148,9 @@ func main() {
 
 		go hbMonitor.Run(nodeCtx)
 	}
-	wg.Wait()
+	for _, ch := range readyChs {
+		<-ch
+	}
 
 	// CLI uses the host sucursal in VM mode, or first sucursal in dev mode.
 	var cliSvc *service.TicketService
@@ -160,6 +162,12 @@ func main() {
 	} else if len(cfg.Nodes) > 0 {
 		cliSvc = nodeServices[cfg.Nodes[0].ID]
 	}
+
+	defer func() {
+		for _, d := range nodeDbs {
+			_ = d.Close()
+		}
+	}()
 
 	if err := cli.Run(cfg.Nodes, stores, cliHostNode, cliSvc, startupLog, nodeLogs); err != nil {
 		startupLog.Fatalf("cli error: %v", err)

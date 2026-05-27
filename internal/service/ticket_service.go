@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,7 +27,7 @@ const queryTimeout = 3 * time.Second
 // esto nos ganrantiza que no exista dos usuarios en dos nodos con el mismo ID
 // NOTA: esto esta ganrantizo solo para un pequeño numero de IDs, esta solucion
 // No escala correctamente para sistemas grandes
-var idCounter int64
+var idCounter = time.Now().UnixMilli()%1_000_000_000 + int64(rand.Intn(1000))
 
 // newID regresa el ID para que no haga colicion en los demas nodos
 func newID(nodeID int) int {
@@ -300,10 +301,16 @@ func (s *TicketService) CloseTicket(ctx context.Context, idTicket int64, idIngen
 // RedistributeTickets reasigna los tickets abiertos de un nodo caido a ingenieros disponibles
 // solo lo ejecuta el maestro cuando detecta que un nodo murio
 func (s *TicketService) RedistributeTickets(ctx context.Context, deadNodeID int) {
-	tickets, err := s.db.GetOpenTicketsBySucursal(deadNodeID)
+	allTickets, err := s.ListAll(ctx, "TICKETS")
 	if err != nil {
 		s.log.Errorf("[service] redistribute: query tickets: %v", err)
 		return
+	}
+	var tickets []dto.TicketRow
+	for _, r := range allTickets {
+		if t, ok := r.(dto.TicketRow); ok && t.Estado == "ABIERTO" && t.IDSucursal == deadNodeID {
+			tickets = append(tickets, t)
+		}
 	}
 	if len(tickets) == 0 {
 		return
@@ -331,10 +338,10 @@ func (s *TicketService) RedistributeTickets(ctx context.Context, deadNodeID int)
 		available = available[1:]
 
 		row := dto.TicketRow{
-			ID:            int(t.ID),
+			ID:            t.ID,
 			IDUsuario:     t.IDUsuario,
 			IDIngeniero:   eng.ID,
-			IDSucursal:    s.self.ID, // reassign to our sucursal
+			IDSucursal:    eng.SucursalID,
 			IDDispositivo: t.IDDispositivo,
 			Estado:        "ABIERTO",
 			CreatedAt:     t.CreatedAt,

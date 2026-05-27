@@ -178,10 +178,14 @@ func (e *Engine) acquireRemote(ctx context.Context) (func(), error) {
 		if !granted {
 			return nil, fmt.Errorf("mutex: lock denied")
 		}
-		// tenemos el lock — la funcion release manda LOCK_RELEASE al maestro
+		// tenemos el lock — la funcion release manda LOCK_RELEASE al maestro actual
 		release := func() {
+			currentMaster := e.state.GetMasterNode()
+			if currentMaster == nil {
+				return
+			}
 			p := dto.LockPayload{RequestID: reqID, Resource: "engineer_assignment"}
-			_ = e.pool.SendJSON(e.self, *master, dto.TypeLockRelease, p)
+			_ = e.pool.SendJSON(e.self, *currentMaster, dto.TypeLockRelease, p)
 		}
 		return release, nil
 	case <-time.After(lockTimeout):

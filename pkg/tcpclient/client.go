@@ -54,6 +54,7 @@ func (c *Client) readLoop() {
 	defer close(c.Recv)
 	defer close(c.done)
 	scanner := bufio.NewScanner(c.conn)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		// descartamos mensajes de fan-out — el sender pool nunca lee Recv
 		// si no descartamos, Recv se llena, readLoop se bloquea y causa TCP backpressure

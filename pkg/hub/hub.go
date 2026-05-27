@@ -35,6 +35,7 @@ type Hub struct {
 	register  chan *Client
 	// unregister se usa para limpiar la conexion cuando un cliente se desconecta
 	unregister chan *Client
+	done       chan struct{}
 	log        *zap.SugaredLogger
 	store      *msgstore.Store
 	dispatcher Dispatcher
@@ -51,16 +52,22 @@ func New(name string, log *zap.SugaredLogger, store *msgstore.Store) *Hub {
 		broadcast:  make(chan []byte, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
+		done:       make(chan struct{}),
 		log:        log,
 		store:      store,
 	}
 }
+
+// Stop signals the hub goroutine to exit
+func (h *Hub) Stop() { close(h.done) }
 
 // Run es el loop principal del hub — procesa conexiones, desconexiones y mensajes
 // debe correr en su propia goroutine
 func (h *Hub) Run() {
 	for {
 		select {
+		case <-h.done:
+			return
 		case c := <-h.register:
 			h.clients[c] = true
 			h.log.Debugf("[%s] client connected, total=%d", h.name, len(h.clients))
@@ -118,6 +125,7 @@ func (c *Client) readPump() {
 		}
 	}()
 	scanner := bufio.NewScanner(c.conn)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		buf := make([]byte, len(line))

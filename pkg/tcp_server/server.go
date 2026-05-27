@@ -15,10 +15,11 @@ type tcpServer struct {
 	node       node.Node
 	store      *msgstore.Store
 	dispatcher hub.Dispatcher
+	Ready      chan struct{}
 }
 
 func New(n node.Node, store *msgstore.Store) *tcpServer {
-	return &tcpServer{node: n, store: store}
+	return &tcpServer{node: n, store: store, Ready: make(chan struct{})}
 }
 
 func (s *tcpServer) SetDispatcher(d hub.Dispatcher) { s.dispatcher = d }
@@ -27,8 +28,10 @@ func (s *tcpServer) Start(ctx context.Context) error {
 	addr := fmt.Sprintf(":%d", s.node.Port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
+		close(s.Ready)
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
+	close(s.Ready)
 	return s.serve(ctx, ln)
 }
 
@@ -45,6 +48,7 @@ func (s *tcpServer) serve(ctx context.Context, ln net.Listener) error {
 
 	go func() {
 		<-ctx.Done()
+		h.Stop()
 		if err := ln.Close(); err != nil {
 			l.Debugf("[%s] listener close error: %v", s.node.Name, err)
 		}

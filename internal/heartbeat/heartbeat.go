@@ -41,6 +41,8 @@ type Monitor struct {
 	missed  map[int]int
 	// pongChs son los canales donde esperamos el PONG de cada nodo
 	pongChs map[int]chan struct{}
+	// inFlight evita lanzar un segundo ping a un peer que aun no ha respondido
+	inFlight map[int]bool
 
 	// OnNodeDead se llama cuando un nodo es declarado muerto
 	// se usa para redistribuir los tickets del nodo caido
@@ -57,6 +59,7 @@ func New(self node.Node, state *nodestate.State, pool *sender.Pool, elec *electi
 		log:      log,
 		missed:   make(map[int]int),
 		pongChs:  make(map[int]chan struct{}),
+		inFlight: make(map[int]bool),
 	}
 }
 
@@ -86,6 +89,19 @@ func (m *Monitor) pingAll(ctx context.Context) {
 // pingOne manda un PING a un nodo y espera su PONG
 // si no llega en pongWait, cuenta un fallo — al llegar a maxMissed declara el nodo muerto
 func (m *Monitor) pingOne(ctx context.Context, peer node.Node) {
+	m.mu.Lock()
+	if m.inFlight[peer.ID] {
+		m.mu.Unlock()
+		return
+	}
+	m.inFlight[peer.ID] = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(m.inFlight, peer.ID)
+		m.mu.Unlock()
+	}()
+
 	ch := make(chan struct{}, 1)
 	m.mu.Lock()
 	m.pongChs[peer.ID] = ch
