@@ -87,7 +87,8 @@ func (e *Engine) Propose(ctx context.Context, operation, data string) error {
 
 func (e *Engine) propose(ctx context.Context, operation, data string) error {
 	peers := e.state.AlivePeers()
-	needed := (len(peers)+1)/2 + 1 // majority of all nodes including self
+	total := len(e.state.All())
+	needed := total/2 + 1
 	if needed < 1 {
 		needed = 1
 	}

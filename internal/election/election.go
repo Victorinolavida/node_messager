@@ -68,6 +68,12 @@ func (e *Engine) StartElection() {
 	// iniciamos el temporizador — si nadie responde, ganamos
 	e.mu.Lock()
 	e.okTimer = time.AfterFunc(okTimeout, func() {
+		e.mu.Lock()
+		if !e.running {
+			e.mu.Unlock()
+			return
+		}
+		e.mu.Unlock()
 		e.declareVictory()
 	})
 	e.mu.Unlock()
